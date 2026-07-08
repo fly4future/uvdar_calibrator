@@ -13,7 +13,7 @@ An example of such grid:
 
 If the camera is constructed correctly, the output image of the pattern should look like this:
  
-![alt text](.figcamera_view-1.bmp) 
+![alt text](camera_view.jpg)
 
 ## Overview
 
