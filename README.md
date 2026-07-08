@@ -7,13 +7,13 @@ The Python GUI version provides calibration coverage feedback similar to ROS `ca
 
 The grid should be non-square, and composed of LEDs emitting in the 395nm range.
 An example of such grid:
-![](IMG_7216-1.jpeg)
-![](IMG_7217.jpeg)
-![](IMG_7218.jpeg) 
+![alt text](IMG_7216.jpeg)
+![alt text](IMG_7217.jpeg)
+![alt text](IMG_7218.jpeg)
 
 If the camera is constructed correctly, the output image of the pattern should look like this:
-
-![](.figcamera_view.bmp)
+ 
+![alt text](.figcamera_view-1.bmp) 
 
 ## Overview
 
