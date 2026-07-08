@@ -1,7 +1,7 @@
 # Camera_Calibration_UVDAR
 A Python-based UV-DAR camera calibration tool based on Davide Scaramuzza's OCamCalib model, adapted for UV-sensitive cameras using an LED grid calibration pattern.
 
-This tool is intended for calibrating the UV-sensitive Arducam used on RoboFly / UVDAR systems. The calibration pattern should be a non-square UV LED grid, where the LED markers act like the internal corners of a checkerboard grid.
+This tool is intended for calibrating the UV-sensitive on any camera. The calibration pattern should be a non-square UV LED grid, where the LED markers act like the internal corners of a checkerboard grid.
 
 The Python GUI version provides calibration coverage feedback similar to ROS `camera_calibration`, including image position, size, skew, and reprojection error.
 
@@ -78,17 +78,9 @@ Capture images where:
 - the grid is tilted in different directions
 
 A good starting point is usually:
-
-```text
 15-25 usable images
-```
 
-More images can help, but image diversity is more important than the raw image count.
-
-The GUI will help determine whether enough images have been captured.
-
----
-
+More images can help, but image diversity is more important than the raw image count. The GUI will help determine whether enough images have been captured.
 ## 3. Move Images into the Python Calibration Folder
 
 On the computer where you run the Python calibration code, create a folder named:
@@ -129,8 +121,6 @@ i_3.bmp
 ...
 ```
 
----
-
 ## 4. Install Python Requirements
 
 Install the required Python packages:
@@ -145,8 +135,6 @@ Optional, for MATLAB `.mat` output:
 pip install scipy
 ```
 
----
-
 ## 5. Run the UV-DAR Calibration GUI
 
 From the folder containing `ocam_calibration_step_gui.py`, run:
@@ -155,25 +143,11 @@ From the folder containing `ocam_calibration_step_gui.py`, run:
 python ./ocam_calibration_step_gui.py --image_dir photos --base_name i_ --extension bmp --gui
 ```
 
-On Windows PowerShell, use:
-
-```powershell
-python .\ocam_calibration_step_gui.py --image_dir photos --base_name i_ --extension bmp --gui
-```
-
 For final calibration, the MATLAB-style slow center search is recommended:
 
 ```bash
 python ./ocam_calibration_step_gui.py --image_dir photos --base_name i_ --extension bmp --gui --slow_find_center
 ```
-
-On Windows PowerShell:
-
-```powershell
-python .\ocam_calibration_step_gui.py --image_dir photos --base_name i_ --extension bmp --gui --slow_find_center
-```
-
----
 
 ## 6. Using the GUI
 
@@ -199,8 +173,6 @@ Image count
 ```
 
 The goal is not just to collect many images. The goal is to collect images that cover the full camera field of view.
-
----
 
 ## 7. Understanding the Coverage Graph
 
@@ -244,20 +216,11 @@ max image avg:  highest average reprojection error from any single image
 ```
 
 A good calibration usually has:
-
-```text
 average reprojection error < 1.0 px
-```
 
 Lower is better. Values around:
-
-```text
 0.3-0.5 px
-```
-
 are generally good.
-
----
 
 ## 8. What Reprojection Error Means
 
@@ -271,11 +234,7 @@ The error is computed approximately as:
 error = sqrt((detected_row - projected_row)^2 + (detected_col - projected_col)^2)
 ```
 
-For each image, the displayed error is the average error across all detected UV markers in that image.
-
-The center-to-point distance is useful for coverage and field-of-view analysis, but it is not calibration error.
-
----
+For each image, the displayed error is the average error across all detected UV markers in that image. The center-to-point distance is useful for coverage and field-of-view analysis, but it is not calibration error.
 
 ## 9. Command-Line Calibration Without the GUI
 
@@ -295,8 +254,6 @@ python ./ocam_calibration_step_gui.py --image_dir photos --base_name i_ --extens
 
 The slow center search is recommended for the final calibration because it is closer to the original MATLAB OCamCalib process.
 
----
-
 ## 10. Coverage-Only Mode
 
 To check image coverage without running full calibration:
@@ -306,3 +263,6 @@ python ./ocam_calibration_step_gui.py --image_dir photos --base_name i_ --extens
 ```
 
 This mode is useful after adding new images. It lets you check whether the current photo set has enough variation before running the full calibration.
+
+## Note
+Some graphs and calibration information open in separate plot windows. The program may pause until the current plot window is closed. To continue to the next graph or calibration step, close the current plot tab/window first.
