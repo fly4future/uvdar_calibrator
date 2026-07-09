@@ -1,5 +1,5 @@
 # Camera_Calibration_UVDAR
-A Python-based UV-DAR camera calibration tool based on Davide Scaramuzza's OCamCalib model, adapted for UV-sensitive cameras using an LED grid calibration pattern.
+A Python-based UV-DAR camera calibration tool based on [Davide Scaramuzza's OCamCalib model](https://sites.google.com/site/scarabotix/ocamcalib-omnidirectional-camera-calibration-toolbox-for-matlab/ocamcalib-toolbox-download-page?authuser=0), adapted for UV-sensitive cameras using an LED grid calibration pattern.
 
 This tool is intended for calibrating the UV-sensitive cameras. The calibration pattern should be a non-square UV LED grid, where the LED markers act like the internal corners of a checkerboard grid.
 
@@ -136,17 +136,10 @@ python ./ocam_calibration.py --image_dir photos --base_name i_ --extension bmp -
 
 ## 4. Install Python Requirements
 
-Install the required Python packages:
+Install the required Python packages using:
 
 ```bash
-pip install numpy matplotlib opencv-python
-```
-
-Optional, for MATLAB `.mat` output:
-
-```bash
-pip install scipy
-```
+pip install -r requirements.txt
 
 ## 5. Run the UV-DAR Calibration GUI
 
