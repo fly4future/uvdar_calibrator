@@ -19,7 +19,7 @@ If the camera is constructed correctly, the output image of the pattern should l
 
 The full calibration workflow is:
 
-1. Capture UV LED grid images using the Arducam on the Raspberry Pi.
+1. Capture UV LED grid images using any suitable camera capture method such as Arducam on Raspberry Pi, Pylon Viewer, ROS/rosbags, etc.
 2. Move the captured images into a folder called `photos`. The images can have any filename and may be any supported image type.
 3. Run the Python calibration GUI.
 4. Check that UV markers are detected correctly.
@@ -35,9 +35,13 @@ Supported image types:
 jpg, jpeg, bmp, png, tif, tiff
 ```
 
-## 1. Capture Calibration Images on the Raspberry Pi
+## 1. Capture Calibration Images
 
-Before running the Python calibration tool, capture calibration images using the Arducam connected to the Raspberry Pi.
+Example: Arducam on Raspberry Pi
+
+The following Raspberry Pi / Arducam process is only an example. It is not required if you are using another camera system or capture tool.
+
+ Before running the Python calibration tool, capture calibration images using the Arducam connected to the Raspberry Pi.
 
 Use the same exposure, gain, image size, and resolution settings for every calibration image.
 
@@ -150,12 +154,6 @@ From the folder containing `ocam_calibration.py`, run:
 python ./ocam_calibration.py --image_dir photos --gui
 ```
 
-For final calibration, the MATLAB-style slow center search is recommended:
-
-```bash
-python ./ocam_calibration.py --image_dir photos --gui --slow_find_center
-```
-
 ## 6. Using the GUI
 
 In the GUI:
@@ -250,19 +248,9 @@ For each image, the displayed error is the average error across all detected UV 
 
 You can also run calibration directly from the terminal.
 
-Fast center search:
-
 ```bash
 python ./ocam_calibration.py --image_dir photos --no_plots
 ```
-
-MATLAB-style slow center search:
-
-```bash
-python ./ocam_calibration.py --image_dir photos --no_plots --slow_find_center
-```
-
-The slow center search is recommended for the final calibration because it is closer to the original MATLAB OCamCalib process.
 
 ## 10. Coverage-Only Mode
 
