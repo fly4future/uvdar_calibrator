@@ -7,13 +7,13 @@ The Python GUI version provides calibration coverage feedback similar to ROS `ca
 
 The grid should be non-square, and composed of LEDs emitting in the 395nm range.
 An example of such grid:
-![alt text](IMG_7216.jpeg)
-![alt text](IMG_7217.jpeg)
-![alt text](IMG_7218.jpeg)
+![alt text](.figpattern_off.jpeg)
+![alt text](.figpattern_on.jpeg)
+![alt text](.figpattern_backside.jpeg)
 
 If the camera is constructed correctly, the output image of the pattern should look like this:
  
-![alt text](camera_view.jpg)
+![alt text](.figcamera_view.jpg)
 
 ## Overview
 
@@ -188,7 +188,7 @@ Image count
 
 The goal is not just to collect many images. The goal is to collect images that cover the full camera field of view.
 
-![alt text](gui_interface.png)
+![alt text](.figgui_interface.png)
 
 ## 7. Understanding the Coverage Graph
 
