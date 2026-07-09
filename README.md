@@ -35,9 +35,7 @@ Supported image types:
 jpg, jpeg, bmp, png, tif, tiff
 ```
 
-## 1. Capture Calibration Images
-
-Example: Arducam on Raspberry Pi
+## 1. Capture Calibration Images (Ex: Arducam on Raspberry Pi)
 
 The following Raspberry Pi / Arducam process is only an example. It is not required if you are using another camera system or capture tool.
 
