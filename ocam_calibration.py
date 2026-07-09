@@ -109,6 +109,9 @@ def _require_calib(calib_data: CalibData) -> bool:
 def _normalize_extension(extension: str) -> List[str]:
     ext = extension.lower().strip().lstrip(".")
 
+    if ext in {"all", "*", ""}:
+        return ["jpg", "jpeg", "bmp", "png", "tif", "tiff"]
+
     if ext == "j":
         return ["jpg", "jpeg"]
 
@@ -118,26 +121,35 @@ def _normalize_extension(extension: str) -> List[str]:
     if ext in {"bmp", "png", "tif", "tiff"}:
         return [ext]
 
-    if ext in {"all", "*"}:
-        return ["jpg", "jpeg", "bmp", "png", "tif", "tiff"]
-
     return [ext]
-
 
 def find_image_files(
     image_dir: str,
-    base_name: str = "i_",
-    extension: str = "j",
+    base_name: str = "",
+    extension: str = "all",
 ) -> List[str]:
+    """
+    Find calibration images in image_dir.
+
+    By default, this loads all supported image files regardless of filename:
+        jpg, jpeg, bmp, png, tif, tiff
+
+    If base_name is provided, only files starting with that base name are loaded.
+    If extension is provided as something other than "all" or "*", only that type is loaded.
+    """
     exts = _normalize_extension(extension)
     files: List[str] = []
 
     for ext in exts:
-        files.extend(glob.glob(str(Path(image_dir) / f"{base_name}*.{ext}")))
-        files.extend(glob.glob(str(Path(image_dir) / f"{base_name}*.{ext.upper()}")))
+        if base_name:
+            pattern = f"{base_name}*.{ext}"
+        else:
+            pattern = f"*.{ext}"
 
-    return sorted(set(files), key=lambda p: (len(Path(p).stem), Path(p).stem, p))
+        files.extend(glob.glob(str(Path(image_dir) / pattern)))
+        files.extend(glob.glob(str(Path(image_dir) / pattern.upper())))
 
+    return sorted(set(files), key=lambda p: (Path(p).suffix.lower(), Path(p).name.lower()))
 
 def _read_image_gray(path: str) -> np.ndarray:
     if cv2 is None:
@@ -2581,8 +2593,8 @@ def launch_coverage_gui(
             self.root.minsize(1000, 650)
 
             self.image_dir = tk.StringVar(value=image_dir)
-            self.base_name = tk.StringVar(value=base_name)
-            self.extension = tk.StringVar(value=extension)
+            self.base_name = tk.StringVar(value="")
+            self.extension = tk.StringVar(value="all")
             self.n_sq_x = tk.IntVar(value=n_sq_x)
             self.n_sq_y = tk.IntVar(value=n_sq_y)
             self.spacing_mm = tk.DoubleVar(value=spacing_mm)
@@ -2976,15 +2988,13 @@ def _build_arg_parser() -> argparse.ArgumentParser:
 
     p.add_argument(
         "--base_name",
-        default="i_",
-        help="Image base name, e.g. i_ for i_1.bmp.",
-    )
-
+        default="",
+        help="Image filename prefix. Empty means use all names.")
+    
     p.add_argument(
         "--extension",
         default="all",
-        help="Image extension: j, jpg, jpeg, bmp, png, tif, tiff, or all.",
-    )
+        help="Image extension. Use 'all' to load jpg/jpeg/bmp/png/tif/tiff.")
 
     p.add_argument(
         "--n_sq_x",

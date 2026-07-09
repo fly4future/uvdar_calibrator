@@ -1,7 +1,7 @@
 # Camera_Calibration_UVDAR
 A Python-based UV-DAR camera calibration tool based on Davide Scaramuzza's OCamCalib model, adapted for UV-sensitive cameras using an LED grid calibration pattern.
 
-This tool is intended for calibrating the UV-sensitive on any camera. The calibration pattern should be a non-square UV LED grid, where the LED markers act like the internal corners of a checkerboard grid.
+This tool is intended for calibrating the UV-sensitive cameras. The calibration pattern should be a non-square UV LED grid, where the LED markers act like the internal corners of a checkerboard grid.
 
 The Python GUI version provides calibration coverage feedback similar to ROS `camera_calibration`, including image position, size, skew, and reprojection error.
 
@@ -20,12 +20,19 @@ If the camera is constructed correctly, the output image of the pattern should l
 The full calibration workflow is:
 
 1. Capture UV LED grid images using the Arducam on the Raspberry Pi.
-2. Move the captured `.bmp` images into a folder called `photos`.
+2. Move the captured images into a folder called `photos`. The images can have any filename and may be any supported image type.
 3. Run the Python calibration GUI.
 4. Check that UV markers are detected correctly.
 5. Use the coverage graph to determine whether more images are needed.
 6. Calibrate the camera.
 7. Export the final OCamCalib parameters to `calib_results.txt`.
+
+By default, the calibration script loads every supported image in the `photos` folder. The images do **not** need to be named `i_1.bmp`, `i_2.bmp`, etc.
+
+Supported image types:
+
+```text
+jpg, jpeg, bmp, png, tif, tiff
 
 ## 1. Capture Calibration Images on the Raspberry Pi
 
@@ -36,6 +43,10 @@ Use the same exposure, gain, image size, and encoding settings for every calibra
 Use this command to capture one image:
 ```bash
 rpicam-still --shutter 1 -t 5000 -o i_1.bmp --encoding bmp --gain 0.05 --width 960 --height 600
+
+Use this command to capture one image:
+```bash
+rpicam-still --shutter 1 -t 5000 -o center_close.bmp --encoding bmp --gain 0.05 --width 960 --height 600
 ```
 For the next image, change the output name:
 ```bash
@@ -55,6 +66,40 @@ Recommended capture settings:
 shutter:  1
 timeout:  5000 ms
 encoding: bmp
+gain:     0.05
+width:    960
+height:   600
+```
+
+## 1. Capture Calibration Images on the Raspberry Pi
+
+Before running the Python calibration tool, capture calibration images using the Arducam connected to the Raspberry Pi.
+
+Use the same exposure, gain, image size, and resolution settings for every calibration image.
+
+Use this command to capture one image:
+
+```bash
+rpicam-still --shutter 1 -t 5000 -o center_close.bmp --encoding bmp --gain 0.05 --width 960 --height 600
+```
+
+The output filename can be anything. For example:
+```text
+rpicam-still --shutter 1 -t 5000 -o center_close.bmp --encoding bmp --gain 0.05 --width 960 --height 600
+rpicam-still --shutter 1 -t 5000 -o left_edge.bmp --encoding bmp --gain 0.05 --width 960 --height 600
+rpicam-still --shutter 1 -t 5000 -o top_corner.bmp --encoding bmp --gain 0.05 --width 960 --height 600
+```
+
+BMP is recommended for Raspberry Pi capture because it avoids extra compression artifacts, but the Python calibration script can also read other supported image types if they are placed in the photos folder.
+
+Supported image types: 
+jpg, jpeg, bmp, png, tif, tiff
+
+Recommended capture settings:
+```text
+shutter:  1
+timeout:  5000 ms
+encoding: bmp recommended
 gain:     0.05
 width:    960
 height:   600
@@ -81,6 +126,7 @@ A good starting point is usually:
 15-25 usable images
 
 More images can help, but image diversity is more important than the raw image count. The GUI will help determine whether enough images have been captured.
+
 ## 3. Move Images into the Python Calibration Folder
 
 On the computer where you run the Python calibration code, create a folder named:
@@ -89,36 +135,42 @@ On the computer where you run the Python calibration code, create a folder named
 photos
 ```
 
-Place all captured `.bmp` calibration images inside this folder.
+Place all captured calibration images inside this folder.
 
 The expected folder structure is:
 
 ```text
 camera_calibration_python/
-├── ocam_calibration_step_gui.py
+├── ocam_calibration.py
 ├── photos/
 │   ├── i_1.bmp
-│   ├── i_2.bmp
-│   ├── i_3.bmp
-│   ├── ...
-│   └── i_25.bmp
+│   ├── center_close.bmp
+│   ├── left_edge.png
+│   ├── top_corner.jpg
+│   └── calibration_view_12.tiff
 ```
 
-The Python calibration script expects:
+The Python calibration script reads every supported image in the `photos` folder by default.  The images do **not** need to follow a specific naming pattern.
 
-```text
-image folder: photos
-base name:    i_
-extension:    bmp
-```
-
-So the image names should follow this format:
+Valid example filenames:
 
 ```text
 i_1.bmp
-i_2.bmp
-i_3.bmp
-...
+left_corner.png
+center_close.jpg
+calibration_view_12.tiff
+robofly_test_image.bmp
+image001.jpeg
+
+The only requirements are:
+1. The images are inside the photos folder.
+2. The images are one of the supported file types.
+3. The UV LED grid is visible in the image.
+
+Optional filtering is still available. To use only files beginning with a specific prefix, use `--base_name`. To use only one image type, use `--extension`. For example:
+
+```bash
+python ./ocam_calibration.py --image_dir photos --base_name i_ --extension bmp --gui
 ```
 
 ## 4. Install Python Requirements
@@ -137,16 +189,16 @@ pip install scipy
 
 ## 5. Run the UV-DAR Calibration GUI
 
-From the folder containing `ocam_calibration_step_gui.py`, run:
+From the folder containing `ocam_calibration.py`, run:
 
 ```bash
-python ./ocam_calibration_step_gui.py --image_dir photos --base_name i_ --extension bmp --gui
+python ./ocam_calibration.py --image_dir photos --gui
 ```
 
 For final calibration, the MATLAB-style slow center search is recommended:
 
 ```bash
-python ./ocam_calibration_step_gui.py --image_dir photos --base_name i_ --extension bmp --gui --slow_find_center
+python ./ocam_calibration.py --image_dir photos --gui --slow_find_center
 ```
 
 ## 6. Using the GUI
@@ -158,8 +210,9 @@ In the GUI:
 3. Review the calibration coverage bars.
 4. Add more photos if coverage is incomplete.
 5. Once coverage is complete, click **CALIBRATE**.
-6. Review the reprojection error.
-7. Save or export the calibration results.
+6. Make the GUI fullscreen or large enough so the **CALIBRATE** button is visible.
+7. Review the reprojection error.
+8. Save or export the calibration results.
 
 The GUI checks coverage in several categories:
 
@@ -173,6 +226,8 @@ Image count
 ```
 
 The goal is not just to collect many images. The goal is to collect images that cover the full camera field of view.
+
+![alt text](gui_interface.png)
 
 ## 7. Understanding the Coverage Graph
 
@@ -243,13 +298,13 @@ You can also run calibration directly from the terminal.
 Fast center search:
 
 ```bash
-python ./ocam_calibration_step_gui.py --image_dir photos --base_name i_ --extension bmp --no_plots
+python ./ocam_calibration.py --image_dir photos --no_plots
 ```
 
 MATLAB-style slow center search:
 
 ```bash
-python ./ocam_calibration_step_gui.py --image_dir photos --base_name i_ --extension bmp --no_plots --slow_find_center
+python ./ocam_calibration.py --image_dir photos --no_plots --slow_find_center
 ```
 
 The slow center search is recommended for the final calibration because it is closer to the original MATLAB OCamCalib process.
@@ -259,7 +314,7 @@ The slow center search is recommended for the final calibration because it is cl
 To check image coverage without running full calibration:
 
 ```bash
-python ./ocam_calibration_step_gui.py --image_dir photos --base_name i_ --extension bmp --coverage_only --show_coverage
+python ./ocam_calibration.py --image_dir photos --coverage_only --show_coverage
 ```
 
 This mode is useful after adding new images. It lets you check whether the current photo set has enough variation before running the full calibration.
