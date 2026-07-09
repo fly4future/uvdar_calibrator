@@ -140,6 +140,7 @@ Install the required Python packages using:
 
 ```bash
 pip install -r requirements.txt
+```
 
 ## 5. Run the UV-DAR Calibration GUI
 
