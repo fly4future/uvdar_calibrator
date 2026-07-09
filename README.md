@@ -3,7 +3,7 @@ A Python-based UV-DAR camera calibration tool based on [Davide Scaramuzza's OCam
 
 This tool is intended for calibrating the UV-sensitive cameras. The calibration pattern should be a non-square UV LED grid, where the LED markers act like the internal corners of a checkerboard grid.
 
-The Python GUI version provides calibration coverage feedback similar to ROS `camera_calibration`, including image position, size, skew, and reprojection error.
+The tool follows the architecture of ROS `camera_calibration` (image_pipeline): photos are fed one at a time into a calibration engine that decides whether to *accept* each view as a calibration sample. Views that are too similar to an already-accepted sample are **rejected as near-duplicates** — this is expected and is what produces a diverse calibration set. Readiness is reported as X / Y / Size / Skew range progress bars, exactly like the ROS tool.
 
 The grid should be non-square, and composed of LEDs emitting in the 395nm range.
 An example of such grid:
@@ -103,8 +103,16 @@ Place all captured calibration images inside this folder.
 The expected folder structure is:
 
 ```text
-camera_calibration_python/
-├── ocam_calibration.py
+uvdar_calibrator_repo/
+├── uvdar_calibrator/        # the calibration package
+│   ├── board.py             # LED grid target geometry
+│   ├── detection.py         # marker detection (chessboard -> circle grid -> UV dots)
+│   ├── ocam_model.py        # OCamCalib/Scaramuzza solver math
+│   ├── coverage.py          # sample selection + readiness scoring
+│   ├── calibrator.py        # Calibrator engine (accept/reject, solve, export)
+│   ├── plots.py             # matplotlib diagnostics
+│   ├── gui.py               # Tkinter GUI
+│   └── cli.py               # command-line entry point
 ├── photos/
 │   ├── i_1.bmp
 │   ├── center_close.bmp
@@ -133,7 +141,7 @@ The only requirements are:
 Optional filtering is still available. To use only files beginning with a specific prefix, use `--base_name`. To use only one image type, use `--extension`. For example:
 
 ```bash
-python ./ocam_calibration.py --image_dir photos --base_name i_ --extension bmp --gui
+python -m uvdar_calibrator --image_dir photos --base_name i_ --extension bmp --gui
 ```
 
 ## 4. Install Python Requirements
@@ -146,43 +154,46 @@ pip install -r requirements.txt
 
 ## 5. Run the UV-DAR Calibration GUI
 
-From the folder containing `ocam_calibration.py`, run:
+From the repository root, run:
 
 ```bash
-python ./ocam_calibration.py --image_dir photos --gui
+python -m uvdar_calibrator --image_dir photos --gui
 ```
 
 ## 6. Using the GUI
 
 In the GUI:
 
-1. Click **Load / Analyze Images**.
-2. Check that the UV markers are detected correctly.
-3. Review the calibration coverage bars.
-4. Add more photos if coverage is incomplete.
-5. Once coverage is complete, click **CALIBRATE**.
-6. Make the GUI fullscreen or large enough so the **CALIBRATE** button is visible.
-7. Review the reprojection error.
-8. Save or export the calibration results.
+1. Click **Load / Analyze Images**. Photos are analyzed one at a time; the
+   sample log shows, for each image, whether it was **added** as a sample,
+   **rejected** because it is too similar to an already-accepted sample, or
+   failed marker detection.
+2. Check that the UV markers are detected correctly (browse the accepted
+   samples with Previous/Next).
+3. Review the four **X / Y / Size / Skew** progress bars. Each bar shows the
+   range of that parameter covered by the accepted samples; it turns green
+   when the covered range is wide enough.
+4. Add more photos if the status says NOT READY (the "Next images to
+   capture" box gives hints about what is missing).
+5. Once the status says READY TO CALIBRATE, click **CALIBRATE**. (You can
+   also calibrate earlier after confirming a warning, but treat the result
+   as preliminary.)
+6. Review the reprojection error.
+7. Click **SAVE / EXPORT** to write `Omni_Calib_Results.npz` and
+   `calib_results.txt`.
 
-The GUI checks coverage in several categories:
-
-```text
-X coverage:       left / center / right
-Y coverage:       top / middle / bottom
-Size coverage:    far-small / medium / close-large
-Skew coverage:    front-on / tilted
-Quadrant coverage
-Image count
-```
-
-The goal is not just to collect many images. The goal is to collect images that cover the full camera field of view.
+Important: **some photos being rejected is normal and correct.** Two photos
+of the grid in nearly the same position, size, and tilt add no new
+information, so only the first one is kept. The goal is not to collect many
+images — it is to collect images that cover the full camera field of view
+with varied positions, sizes, and tilts.
 
 ![alt text](figures/.figgui_interface.png)
 
 ## 7. Understanding the Coverage Graph
 
-The coverage graph shows where each calibration image places the UV LED grid in the camera image.
+With `--show_coverage`, a scatter graph shows where each **accepted** sample
+places the UV LED grid in the camera image.
 
 The x-axis shows:
 
@@ -196,30 +207,7 @@ The y-axis shows:
 vertical board location in image
 ```
 
-Each numbered point corresponds to one calibration image.
-
-The graph also displays reprojection error for each image. For example:
-
-```text
-26
-0.76px
-```
-
-means image 26 has an average reprojection error of `0.76` pixels.
-
-The coverage graph title may look like:
-
-```text
-calibration coverage: 100.0% | avg error: 0.347px | max image avg: 0.760px
-```
-
-This means:
-
-```text
-coverage:       how complete the image-position coverage is
-avg error:      average reprojection error across all images
-max image avg:  highest average reprojection error from any single image
-```
+Each labeled point corresponds to one accepted calibration sample.
 
 A good calibration usually has:
 average reprojection error < 1.0 px
@@ -247,15 +235,20 @@ For each image, the displayed error is the average error across all detected UV 
 You can also run calibration directly from the terminal.
 
 ```bash
-python ./ocam_calibration.py --image_dir photos
+python -m uvdar_calibrator --image_dir photos
 ```
+
+The CLI feeds photos through the same accept/reject sample selection as the
+GUI, prints a readiness report, and then calibrates. If the accepted samples
+do not yet cover enough variation, it prints a warning and calibrates
+anyway — treat that result as preliminary.
 
 ## 10. Coverage-Only Mode
 
 To check image coverage without running full calibration:
 
 ```bash
-python ./ocam_calibration.py --image_dir photos --coverage_only --show_coverage
+python -m uvdar_calibrator --image_dir photos --coverage_only --show_coverage
 ```
 
 This mode is useful after adding new images. It lets you check whether the current photo set has enough variation before running the full calibration.
