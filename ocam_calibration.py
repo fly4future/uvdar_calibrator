@@ -19,7 +19,7 @@ Optional, for MATLAB .mat output:
     pip install scipy
 
 Example:
-    python ocam_calibration.py --image_dir photos --gui
+    python ./ocam_calibration.py --image_dir photos --gui
 
 The image extractor supports: j, jpg, jpeg, bmp, png, tif, tiff.
 """

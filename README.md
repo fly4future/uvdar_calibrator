@@ -247,7 +247,7 @@ For each image, the displayed error is the average error across all detected UV 
 You can also run calibration directly from the terminal.
 
 ```bash
-python ./ocam_calibration.py --image_dir photos --no_plots
+python ./ocam_calibration.py --image_dir photos
 ```
 
 ## 10. Coverage-Only Mode
