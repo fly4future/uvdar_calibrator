@@ -27,48 +27,12 @@ The full calibration workflow is:
 6. Calibrate the camera.
 7. Export the final OCamCalib parameters to `calib_results.txt`.
 
-By default, the calibration script loads every supported image in the `photos` folder. The images do **not** need to be named `i_1.bmp`, `i_2.bmp`, etc.
+By default, the calibration script loads every supported image in the `photos` folder.
 
 Supported image types:
 
 ```text
 jpg, jpeg, bmp, png, tif, tiff
-
-## 1. Capture Calibration Images on the Raspberry Pi
-
-Before running the Python calibration tool, capture calibration images using the Arducam connected to the Raspberry Pi.
-
-Use the same exposure, gain, image size, and encoding settings for every calibration image.
-
-Use this command to capture one image:
-```bash
-rpicam-still --shutter 1 -t 5000 -o i_1.bmp --encoding bmp --gain 0.05 --width 960 --height 600
-
-Use this command to capture one image:
-```bash
-rpicam-still --shutter 1 -t 5000 -o center_close.bmp --encoding bmp --gain 0.05 --width 960 --height 600
-```
-For the next image, change the output name:
-```bash
-rpicam-still --shutter 1 -t 5000 -o i_2.bmp --encoding bmp --gain 0.05 --width 960 --height 600
-```
-Continue numbering the images:
-```text
-i_1.bmp
-i_2.bmp
-i_3.bmp
-...
-i_25.bmp
-```
-
-Recommended capture settings:
-```text
-shutter:  1
-timeout:  5000 ms
-encoding: bmp
-gain:     0.05
-width:    960
-height:   600
 ```
 
 ## 1. Capture Calibration Images on the Raspberry Pi
@@ -91,9 +55,6 @@ rpicam-still --shutter 1 -t 5000 -o top_corner.bmp --encoding bmp --gain 0.05 --
 ```
 
 BMP is recommended for Raspberry Pi capture because it avoids extra compression artifacts, but the Python calibration script can also read other supported image types if they are placed in the photos folder.
-
-Supported image types: 
-jpg, jpeg, bmp, png, tif, tiff
 
 Recommended capture settings:
 ```text
