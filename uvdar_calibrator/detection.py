@@ -248,39 +248,12 @@ def _order_uv_points_projective(
     return np.asarray(ordered, dtype=float)
 
 
-def _detect_grid_points(
+def _try_chessboard_detection(
     img: np.ndarray,
-    n_sq_x: int,
-    n_sq_y: int,
+    expected_cols: int,
+    expected_rows: int,
 ) -> Optional[np.ndarray]:
-    """
-    Detect calibration points.
-
-    First tries normal checkerboard detection.
-    If that fails, falls back to UV bright-dot marker detection.
-
-    Returns points in MATLAB/OCamCalib-style [row, col] order.
-
-    For the UV dot pattern used here:
-      - n_sq_x=6 and n_sq_y=4 means 7 x 5 = 35 points.
-      - The MATLAB log chooses a start point, a "right" point, and a "below"
-        point. For your sample image, the physical x direction runs upward in
-        the image and the physical y direction runs left-to-right.
-      - Therefore the fallback orders points bottom-to-top, and within each
-        row, left-to-right. This matches Xt/Yt creation:
-            for x in range(n_sq_x + 1):
-                for y in range(n_sq_y + 1):
-    """
-    if cv2 is None:
-        raise RuntimeError("OpenCV is required. Run: pip install opencv-python")
-
-    expected_cols = n_sq_x + 1  # 7 for your setup
-    expected_rows = n_sq_y + 1  # 5 for your setup
-    expected_points = expected_cols * expected_rows
-
-    # ------------------------------------------------------------
-    # 1) Try normal checkerboard detection first
-    # ------------------------------------------------------------
+    """Try OpenCV's checkerboard detectors; returns [row, col] points or None."""
     pattern_size = (expected_cols, expected_rows)
     flags = cv2.CALIB_CB_ADAPTIVE_THRESH + cv2.CALIB_CB_NORMALIZE_IMAGE
 
@@ -295,42 +268,52 @@ def _detect_grid_points(
         except Exception:
             ok, corners = False, None
 
-    if ok and corners is not None:
-        corners = np.asarray(corners, dtype=np.float32).reshape(-1, 2)
+    if not ok or corners is None:
+        return None
 
-        try:
-            term = (
-                cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER,
-                40,
-                1e-3,
-            )
-            corners_refined = cv2.cornerSubPix(
-                img,
-                corners.reshape(-1, 1, 2),
-                (5, 5),
-                (-1, -1),
-                term,
-            )
-            corners = corners_refined.reshape(-1, 2)
-        except Exception:
-            pass
+    corners = np.asarray(corners, dtype=np.float32).reshape(-1, 2)
 
-        # OpenCV gives row-major image order. Convert to the x-major order
-        # used by Xt/Yt: x outer, y inner.
-        pts = []
-        for x in range(expected_cols):
-            for y in range(expected_rows):
-                cv_index = y * expected_cols + x
-                col, row = corners[cv_index]
-                pts.append([row, col])
+    try:
+        term = (
+            cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER,
+            40,
+            1e-3,
+        )
+        corners_refined = cv2.cornerSubPix(
+            img,
+            corners.reshape(-1, 1, 2),
+            (5, 5),
+            (-1, -1),
+            term,
+        )
+        corners = corners_refined.reshape(-1, 2)
+    except Exception:
+        pass
 
-        return np.asarray(pts, dtype=float)
+    # OpenCV gives row-major image order. Convert to the x-major order
+    # used by Xt/Yt: x outer, y inner.
+    pts = []
+    for x in range(expected_cols):
+        for y in range(expected_rows):
+            cv_index = y * expected_cols + x
+            col, row = corners[cv_index]
+            pts.append([row, col])
 
-    # ------------------------------------------------------------
-    # 2) Try OpenCV symmetric circle-grid detection for UV dot grids.
-    #    This is more reliable for tilted/rotated UV-dot images than
-    #    grouping by nearly-horizontal image rows.
-    # ------------------------------------------------------------
+    return np.asarray(pts, dtype=float)
+
+
+def _try_circle_grid_detection(
+    img: np.ndarray,
+    expected_cols: int,
+    expected_rows: int,
+    expected_points: int,
+) -> Optional[np.ndarray]:
+    """
+    Try OpenCV's symmetric circle-grid detector for UV dot grids.
+
+    More reliable for tilted/rotated UV-dot images than grouping by
+    nearly-horizontal image rows. Returns [row, col] points or None.
+    """
     def _make_blob_detector():
         params = cv2.SimpleBlobDetector_Params()
         params.filterByColor = True
@@ -387,9 +370,23 @@ def _detect_grid_points(
     except Exception as exc:
         print(f"  UV circle-grid detector skipped: {exc}")
 
-    # ------------------------------------------------------------
-    # 3) UV bright-dot fallback
-    # ------------------------------------------------------------
+    return None
+
+
+def _try_uv_bright_dot_fallback(
+    img: np.ndarray,
+    expected_cols: int,
+    expected_rows: int,
+    expected_points: int,
+) -> Optional[np.ndarray]:
+    """
+    Otsu threshold -> connected components -> row/column grouping.
+
+    Last-resort detector for the UV LED grid when neither checkerboard nor
+    circle-grid detection succeeds. Falls back further to
+    :func:`_order_uv_points_projective` when simple row/column grouping
+    can't resolve a rectangular grid. Returns [row, col] points or None.
+    """
     img_u8 = img.astype(np.uint8)
 
     blur = cv2.GaussianBlur(img_u8, (3, 3), 0)
@@ -532,6 +529,47 @@ def _detect_grid_points(
     pts_row_col = np.column_stack([ordered_xy[:, 1], ordered_xy[:, 0]])
 
     return pts_row_col
+
+
+def _detect_grid_points(
+    img: np.ndarray,
+    n_sq_x: int,
+    n_sq_y: int,
+) -> Optional[np.ndarray]:
+    """
+    Detect calibration points.
+
+    Tries, in order: normal checkerboard detection, OpenCV circle-grid
+    detection, then UV bright-dot marker detection.
+
+    Returns points in MATLAB/OCamCalib-style [row, col] order.
+
+    For the UV dot pattern used here:
+      - n_sq_x=6 and n_sq_y=4 means 7 x 5 = 35 points.
+      - The MATLAB log chooses a start point, a "right" point, and a "below"
+        point. For your sample image, the physical x direction runs upward in
+        the image and the physical y direction runs left-to-right.
+      - Therefore the fallback orders points bottom-to-top, and within each
+        row, left-to-right. This matches Xt/Yt creation:
+            for x in range(n_sq_x + 1):
+                for y in range(n_sq_y + 1):
+    """
+    if cv2 is None:
+        raise RuntimeError("OpenCV is required. Run: pip install opencv-python")
+
+    expected_cols = n_sq_x + 1  # 7 for your setup
+    expected_rows = n_sq_y + 1  # 5 for your setup
+    expected_points = expected_cols * expected_rows
+
+    pts = _try_chessboard_detection(img, expected_cols, expected_rows)
+    if pts is not None:
+        return pts
+
+    pts = _try_circle_grid_detection(img, expected_cols, expected_rows, expected_points)
+    if pts is not None:
+        return pts
+
+    return _try_uv_bright_dot_fallback(img, expected_cols, expected_rows, expected_points)
 
 
 def get_corners(
