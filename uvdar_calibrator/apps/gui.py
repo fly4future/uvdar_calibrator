@@ -2,7 +2,7 @@
 Tkinter calibration GUIs (batch and live).
 
 Both apps feed frames into
-:class:`~uvdar_calibrator.calibrator.Calibrator` and share one panel
+:class:`~uvdar_calibrator.engine.calibrator.Calibrator` and share one panel
 implementation (``_BaseCalibrationApp``):
 
 - a live log of per-frame accept/reject decisions,
@@ -17,7 +17,7 @@ implementation (``_BaseCalibrationApp``):
 ``BatchCalibrationApp`` drives the panel from a folder of photos
 ("frames arrive one at a time" simulated over files);
 ``LiveCalibrationApp`` drives it from a queue of results produced by the
-ROS 2 subscriber in :mod:`uvdar_calibrator.live_node`. Only the frame
+ROS 2 subscriber in :mod:`uvdar_calibrator.apps.live_node`. Only the frame
 *source* differs between the two -- keep panel/progress logic in the base
 class so the apps never diverge.
 """
@@ -29,11 +29,11 @@ import queue
 
 import numpy as np
 
-from . import coverage
-from . import ocam_model
-from .board import LedGridBoard
-from .calibrator import Calibrator
-from .detection import find_image_files, read_image_gray
+from ..engine import coverage
+from ..engine import ocam_model
+from ..engine.board import LedGridBoard
+from ..engine.calibrator import Calibrator
+from ..engine.detection import find_image_files, read_image_gray
 
 try:
     import cv2
@@ -458,7 +458,7 @@ class _BaseCalibrationApp:
             )
 
             if not self.no_plots.get():
-                from . import plots
+                from ..diagnostics import plots
 
                 Xp_abs, Yp_abs, ima_proc = cal._assemble()
                 plots.reproject_calib(

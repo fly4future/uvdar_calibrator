@@ -5,7 +5,12 @@ PACKAGE_NAME = "uvdar_calibrator"
 setup(
     name=PACKAGE_NAME,
     version="1.0.0",
-    packages=[PACKAGE_NAME],
+    packages=[
+        PACKAGE_NAME,
+        PACKAGE_NAME + ".engine",
+        PACKAGE_NAME + ".diagnostics",
+        PACKAGE_NAME + ".apps",
+    ],
     data_files=[
         ("share/ament_index/resource_index/packages", ["resource/" + PACKAGE_NAME]),
         ("share/" + PACKAGE_NAME, ["package.xml"]),
@@ -32,8 +37,8 @@ setup(
     tests_require=["pytest"],
     entry_points={
         "console_scripts": [
-            "cameracalibrator = uvdar_calibrator.live_node:main",
-            "calibrate_offline = uvdar_calibrator.cli:main",
+            "cameracalibrator = uvdar_calibrator.apps.live_node:main",
+            "calibrate_offline = uvdar_calibrator.apps.cli:main",
         ],
     },
 )

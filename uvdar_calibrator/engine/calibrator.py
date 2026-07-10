@@ -6,8 +6,8 @@ GUI-agnostic calibration engine.
 accepted-sample database (``db``), readiness (``goodenough``) and
 calibration state, with ``handle_frame`` as the direct analogue of ROS's
 ``handle_msg`` -- one photo == one "frame". The OCamCalib solver math lives
-in :mod:`uvdar_calibrator.ocam_model`; sample selection lives in
-:mod:`uvdar_calibrator.coverage`.
+in :mod:`uvdar_calibrator.engine.ocam_model`; sample selection lives in
+:mod:`uvdar_calibrator.engine.coverage`.
 
 Behavioral note (intentional change from the old single-file tool): images
 that are too similar to an already-accepted sample are *rejected* rather

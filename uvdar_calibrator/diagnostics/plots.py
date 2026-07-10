@@ -3,7 +3,7 @@ Matplotlib plotting/diagnostics for a completed calibration.
 
 All functions here are plotting-only and block on window close, as in the
 original tool. They operate on explicit arrays plus an
-:class:`~uvdar_calibrator.ocam_model.OCamModel` (no engine/GUI state).
+:class:`~uvdar_calibrator.engine.ocam_model.OCamModel` (no engine/GUI state).
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ from typing import Optional, Sequence
 import matplotlib.pyplot as plt
 import numpy as np
 
-from .ocam_model import (
+from ..engine.ocam_model import (
     _idx,
     OCamModel,
     omni3d2pixel,

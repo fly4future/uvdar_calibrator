@@ -4,9 +4,9 @@ Command-line entry point.
 Mirrors the option-parsing shape of ROS image_pipeline's
 ``nodes/cameracalibrator.py`` (board geometry flags, output dir, no-plots,
 ...), minus everything ROS-specific. Photos are fed one at a time into
-:class:`~uvdar_calibrator.calibrator.Calibrator`, which may *reject* images
-that are too similar to an already-accepted sample -- this is expected and
-is what produces a diverse calibration set.
+:class:`~uvdar_calibrator.engine.calibrator.Calibrator`, which may *reject*
+images that are too similar to an already-accepted sample -- this is
+expected and is what produces a diverse calibration set.
 """
 
 from __future__ import annotations
@@ -15,9 +15,9 @@ import argparse
 from pathlib import Path
 from typing import Optional, Sequence
 
-from .board import LedGridBoard
-from .calibrator import Calibrator
-from .detection import find_image_files, read_image_gray
+from ..engine.board import LedGridBoard
+from ..engine.calibrator import Calibrator
+from ..engine.detection import find_image_files, read_image_gray
 
 
 def _build_arg_parser() -> argparse.ArgumentParser:
@@ -202,7 +202,7 @@ def run(
     print(f"Saved readiness report to {report_path}")
 
     if show_coverage:
-        from . import coverage as _coverage
+        from ..engine import coverage as _coverage
 
         metrics = []
         for sample in cal.db:
@@ -235,7 +235,7 @@ def run(
     )
 
     if do_plots:
-        from . import plots
+        from ..diagnostics import plots
 
         Xp_abs, Yp_abs, ima_proc = cal._assemble()
 

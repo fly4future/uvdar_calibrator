@@ -38,18 +38,23 @@ python -m uvdar_calibrator --image_dir photos --base_name example_ --extension b
 
 ```
 uvdar_calibrator/
-├── board.py        # LedGridBoard target geometry (analogous to ROS ChessboardInfo)
-├── detection.py    # pattern detection: chessboard -> circle grid -> UV bright-dot fallback
-├── ocam_model.py   # OCamModel dataclass + pure Scaramuzza solver math (faithful MATLAB port)
-├── coverage.py     # get_parameters/is_good_sample/compute_goodenough (+ bin-based hint report)
-├── calibrator.py   # Calibrator engine: db/goodenough/handle_frame/cal_fromcorners/export
-├── plots.py        # matplotlib diagnostics (block on window close)
-├── gui.py          # Tkinter app: feeds photos one-by-one into Calibrator, live range bars
-├── cli.py          # argparse entry point
-└── __main__.py     # python -m uvdar_calibrator -> cli.main()
+├── __init__.py             # public API: Calibrator, LedGridBoard, OCamModel, FrameResult, Sample
+├── __main__.py             # python -m uvdar_calibrator -> apps.cli.main()
+├── engine/                 # GUI/ROS-agnostic core -- no tkinter, no rclpy, no matplotlib
+│   ├── board.py              # LedGridBoard target geometry (analogous to ROS ChessboardInfo)
+│   ├── ocam_model.py         # OCamModel dataclass + pure Scaramuzza solver math (faithful MATLAB port)
+│   ├── detection.py          # pattern detection: chessboard -> circle grid -> UV bright-dot fallback
+│   ├── coverage.py           # get_parameters/is_good_sample/compute_goodenough (+ bin-based hint report)
+│   └── calibrator.py         # Calibrator engine: db/goodenough/handle_frame/cal_fromcorners/export
+├── diagnostics/
+│   └── plots.py             # matplotlib diagnostics (block on window close)
+└── apps/                   # the three ways to drive the engine
+    ├── gui.py                 # Tkinter app: feeds photos (or live frames) into Calibrator, live range bars
+    ├── cli.py                  # argparse entry point (offline/batch, calibrate_offline console_script)
+    └── live_node.py            # ROS 2 node: live topic capture (cameracalibrator console_script)
 ```
 
-### The engine (`calibrator.Calibrator`)
+### The engine (`engine/calibrator.Calibrator`)
 
 The direct analogue of ROS's `MonoCalibrator`. One photo == one "frame":
 
@@ -68,12 +73,12 @@ The direct analogue of ROS's `MonoCalibrator`. One photo == one "frame":
 - `save()`/`export_txt()` write `Omni_Calib_Results.npz` (+ optional `.mat`) and
   `calib_results.txt` (OCamCalib text format, computing `invpol` via `findinvpoly`).
 
-The tuning constants in `coverage.py` (`DEFAULT_SAMPLE_THRESHOLD = 0.2`,
+The tuning constants in `engine/coverage.py` (`DEFAULT_SAMPLE_THRESHOLD = 0.2`,
 `DEFAULT_PARAM_RANGES = (0.7, 0.7, 0.4, 0.5)`, `DEFAULT_MIN_DB_SIZE = 40`) are ROS
 camera_calibration defaults carried over unchanged; they likely need retuning for this
 smaller/farther-captured UV grid — see the note at their definition.
 
-### The solver (`ocam_model.py`)
+### The solver (`engine/ocam_model.py`)
 
 Pure math over `(Xt, Yt, Xp_abs, Yp_abs, xc, yc, ...)` arrays — no knowledge of samples,
 goodness, or GUI state. `ima_proc` holds **1-based** (MATLAB-style) image numbers and `_idx()`
@@ -88,7 +93,7 @@ projections as the refinement seed, which could drive reprojection error to exac
 it compared the model against its own output. Preserve this "never seed refinement from the
 model" invariant if touching this function.
 
-### Detection (`detection.py`)
+### Detection (`engine/detection.py`)
 
 `get_corners(img, board)` returns `(ok, corners, board)` like ROS. Detection is tried in
 order and falls back progressively:
@@ -104,7 +109,7 @@ order and falls back progressively:
 The `Calibrator` writes per-image previews/point dumps to
 `<image_dir>/detected_marker_previews/` for every detected image (accepted or not).
 
-### Coverage (`coverage.py`)
+### Coverage (`engine/coverage.py`)
 
 Two layers, only the first of which gates anything:
 
@@ -115,7 +120,7 @@ Two layers, only the first of which gates anything:
   "next images to capture" report driven off accepted samples. It must never gate the
   CALIBRATE button or the CLI.
 
-### GUI (`gui.py`)
+### GUI (`apps/gui.py`)
 
 Tkinter app that reuses the engine directly — when changing pipeline behavior, change
 `Calibrator`/`coverage` once and both CLI and GUI pick it up. Load/Analyze runs

@@ -6,9 +6,9 @@ package (Calibrator engine + incremental sample selection); the solver is a
 faithful port of Scaramuzza's OCamCalib (ctu-mrs/OCamCalib_UVDAR fork).
 """
 
-from .board import LedGridBoard
-from .calibrator import Calibrator, FrameResult, Sample
-from .ocam_model import OCamModel
+from .engine.board import LedGridBoard
+from .engine.calibrator import Calibrator, FrameResult, Sample
+from .engine.ocam_model import OCamModel
 
 __all__ = [
     "Calibrator",

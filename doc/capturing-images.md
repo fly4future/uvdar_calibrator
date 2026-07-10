@@ -86,15 +86,18 @@ The expected folder structure is:
 ```text
 uvdar_calibrator_repo/
 ├── uvdar_calibrator/        # the calibration package
-│   ├── board.py             # LED grid target geometry
-│   ├── detection.py         # marker detection (chessboard -> circle grid -> UV dots)
-│   ├── ocam_model.py        # OCamCalib/Scaramuzza solver math
-│   ├── coverage.py          # sample selection + readiness scoring
-│   ├── calibrator.py        # Calibrator engine (accept/reject, solve, export)
-│   ├── plots.py             # matplotlib diagnostics
-│   ├── gui.py               # Tkinter GUI (batch photo-folder app + live app)
-│   ├── cli.py               # command-line entry point (offline/batch mode)
-│   └── live_node.py         # ROS 2 node: live topic capture (cameracalibrator)
+│   ├── engine/              # GUI/ROS-agnostic core
+│   │   ├── board.py           # LED grid target geometry
+│   │   ├── ocam_model.py      # OCamCalib/Scaramuzza solver math
+│   │   ├── detection.py       # marker detection (chessboard -> circle grid -> UV dots)
+│   │   ├── coverage.py        # sample selection + readiness scoring
+│   │   └── calibrator.py      # Calibrator engine (accept/reject, solve, export)
+│   ├── diagnostics/
+│   │   └── plots.py           # matplotlib diagnostics
+│   └── apps/                # the three ways to drive the engine
+│       ├── gui.py              # Tkinter GUI (batch photo-folder app + live app)
+│       ├── cli.py               # command-line entry point (offline/batch mode)
+│       └── live_node.py         # ROS 2 node: live topic capture (cameracalibrator)
 ├── package.xml, setup.py,   # ROS 2 (ament_python) package scaffolding --
 │   setup.cfg, resource/     # only needed if building/running via colcon
 ├── photos/

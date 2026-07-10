@@ -12,7 +12,7 @@ adapted to hand work off to the Tkinter GUI instead of a cv2.imshow loop:
   most ``rate_hz`` calls per second, since consecutive live frames are
   near-duplicates that would pay full detection cost only to be rejected
   by ``is_good_sample`` -- and feeds them to
-  :meth:`~uvdar_calibrator.calibrator.Calibrator.handle_frame`, pushing
+  :meth:`~uvdar_calibrator.engine.calibrator.Calibrator.handle_frame`, pushing
   each result onto a second queue for the Tkinter app to drain.
 - ``rclpy.spin`` runs on a background :class:`SpinThread`; Tkinter owns
   the main thread.
@@ -45,9 +45,9 @@ import rclpy
 from rclpy.node import Node
 import sensor_msgs.msg
 
-from .board import LedGridBoard
-from .calibrator import Calibrator
 from .gui import launch_live_gui
+from ..engine.board import LedGridBoard
+from ..engine.calibrator import Calibrator
 
 DEFAULT_RATE_HZ = 2.0
 
