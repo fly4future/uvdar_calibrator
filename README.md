@@ -5,6 +5,13 @@ This tool is intended for calibrating the UV-sensitive cameras. The calibration 
 
 The tool follows the architecture of ROS `camera_calibration` (image_pipeline): photos are fed one at a time into a calibration engine that decides whether to *accept* each view as a calibration sample. Views that are too similar to an already-accepted sample are **rejected as near-duplicates** — this is expected and is what produces a diverse calibration set. Readiness is reported as X / Y / Size / Skew range progress bars, exactly like the ROS tool.
 
+The repository is both a standalone Python tool (`python -m uvdar_calibrator`, no ROS
+required) and a colcon-buildable ROS 2 (`ament_python`) package. Once built, it also
+provides a **live** mode — a `cameracalibrator` node that subscribes to a
+`sensor_msgs/Image` topic and feeds frames into the same calibration engine one at a
+time, the same way ROS's own `camera_calibration` package is run. See
+[Running as a ROS 2 Package](#11-running-as-a-ros-2-package) below.
+
 The grid should be non-square, and composed of LEDs emitting in the 395nm range.
 An example of such grid:
 ![alt text](figures/.figpattern_off.jpeg)
@@ -111,8 +118,11 @@ uvdar_calibrator_repo/
 │   ├── coverage.py          # sample selection + readiness scoring
 │   ├── calibrator.py        # Calibrator engine (accept/reject, solve, export)
 │   ├── plots.py             # matplotlib diagnostics
-│   ├── gui.py               # Tkinter GUI
-│   └── cli.py               # command-line entry point
+│   ├── gui.py               # Tkinter GUI (batch photo-folder app + live app)
+│   ├── cli.py               # command-line entry point (offline/batch mode)
+│   └── live_node.py         # ROS 2 node: live topic capture (cameracalibrator)
+├── package.xml, setup.py,   # ROS 2 (ament_python) package scaffolding --
+│   setup.cfg, resource/     # only needed if building/running via colcon
 ├── photos/
 │   ├── i_1.bmp
 │   ├── center_close.bmp
@@ -178,7 +188,12 @@ In the GUI:
 5. Once the status says READY TO CALIBRATE, click **CALIBRATE**. (You can
    also calibrate earlier after confirming a warning, but treat the result
    as preliminary.)
-6. Review the reprojection error.
+6. Review the reprojection error. Once calibrated, the **Forward view
+   (undistorted)** checkbox becomes available — toggle it to preview a
+   cropped, forward-facing perspective crop generated from the calibrated
+   model instead of the raw fisheye frame, as a visual sanity check (works
+   both while browsing accepted samples with Previous/Next and, in live
+   mode, on the incoming stream).
 7. Click **SAVE / EXPORT** to write `Omni_Calib_Results.npz` and
    `calib_results.txt`.
 
@@ -252,6 +267,48 @@ python -m uvdar_calibrator --image_dir photos --coverage_only --show_coverage
 ```
 
 This mode is useful after adding new images. It lets you check whether the current photo set has enough variation before running the full calibration.
+
+## 11. Running as a ROS 2 Package
+
+The repository is also a colcon-buildable `ament_python` package
+(`package.xml`/`setup.py`/`setup.cfg`), providing two `ros2 run` entry points. This is
+purely additive — `python -m uvdar_calibrator` keeps working standalone, no ROS
+required.
+
+Build it into a colcon workspace:
+
+```bash
+# from <colcon_ws>/src
+git clone <this repo> uvdar_calibrator
+cd <colcon_ws>
+colcon build --packages-select uvdar_calibrator
+source install/setup.bash
+```
+
+**Offline/batch mode**, equivalent to `python -m uvdar_calibrator`:
+
+```bash
+ros2 run uvdar_calibrator calibrate_offline --image_dir photos --gui
+```
+
+**Live mode**: a node that subscribes to a `sensor_msgs/Image` topic and feeds frames
+into the same calibration engine one at a time, run the same way as upstream ROS's own
+`camera_calibration` node:
+
+```bash
+ros2 run uvdar_calibrator cameracalibrator \
+  --n_sq_x 6 --n_sq_y 4 --spacing_mm 50 image:=/camera/image_raw
+```
+
+This opens the same Tkinter GUI, but instead of loading a photo folder it captures
+frames live from the given topic (remap `image:=` to your camera's topic name), at a
+throttled processing rate (`--rate_hz`, default 2 Hz) so a live stream doesn't flood
+detection with near-duplicate frames. Accept/reject, the readiness bars, CALIBRATE,
+SAVE/EXPORT, and the Forward view toggle all work identically to the batch GUI.
+
+There is no `SetCameraInfo` upload step: `sensor_msgs/CameraInfo`'s distortion models
+have no slot for the OCamCalib polynomial, so results stay as local files
+(`Omni_Calib_Results.npz`/`.mat` + `calib_results.txt`), same as the offline path.
 
 ## Note
 Some graphs and calibration information open in separate plot windows. The program may pause until the current plot window is closed. To continue to the next graph or calibration step, close the current plot tab/window first.
