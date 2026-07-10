@@ -11,7 +11,7 @@ as a calibration sample, rejecting views that are too similar to one already acc
 The repository works both as a standalone Python tool and, once built with `colcon`, as
 a ROS 2 package with a live `cameracalibrator` node.
 
-![alt text](figures/.figpattern_on.jpeg)
+![UV LED grid pattern, illuminated](.fig/led_grid_on.jpeg)
 
 ## How It Works
 

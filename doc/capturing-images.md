@@ -6,14 +6,14 @@ composed of LEDs emitting in the 395nm range.
 
 An example of such a grid:
 
-![alt text](../figures/.figpattern_off.jpeg)
-![alt text](../figures/.figpattern_on.jpeg)
-![alt text](../figures/.figpattern_backside.jpeg)
+![UV LED grid pattern, unlit](../.fig/led_grid_off.jpeg)
+![UV LED grid pattern, illuminated](../.fig/led_grid_on.jpeg)
+![UV LED grid pattern, backside/mounting](../.fig/led_grid_backside.jpeg)
 
 If the camera is constructed correctly, the output image of the pattern should look
 like this:
 
-![alt text](../figures/.figcamera_view.jpg)
+![Example camera view of the UV LED grid](../.fig/camera_view.jpg)
 
 ## Example: Arducam on Raspberry Pi
 

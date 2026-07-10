@@ -40,7 +40,7 @@ information, so only the first one is kept. The goal is not to collect many
 images — it is to collect images that cover the full camera field of view
 with varied positions, sizes, and tilts.
 
-![alt text](../figures/.figgui_interface.png)
+![Calibration GUI screenshot](../.fig/gui_screenshot.png)
 
 ## Understanding the Coverage Graph
 
