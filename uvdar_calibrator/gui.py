@@ -30,6 +30,7 @@ import queue
 import numpy as np
 
 from . import coverage
+from . import ocam_model
 from .board import LedGridBoard
 from .calibrator import Calibrator
 from .detection import find_image_files, read_image_gray
@@ -94,10 +95,13 @@ class _BaseCalibrationApp:
         self.output_dir = tk.StringVar(value=output_dir)
         self.slow_find_center = tk.BooleanVar(value=slow_find_center)
         self.no_plots = tk.BooleanVar(value=True)
+        self.forward_view_var = tk.BooleanVar(value=False)
 
         self.calibrator: Calibrator | None = None
         self.current_sample_index = 0
         self.photo_ref = None
+        self._forward_view_cache = None        # (map_x, map_y) or None
+        self._forward_view_model_id = None     # id(last built-from model)
 
         self._build_widgets()
         self.root.bind("<Left>", lambda _e: self.prev_sample())
@@ -159,6 +163,14 @@ class _BaseCalibrationApp:
         nav.pack(side=tk.BOTTOM, fill=tk.X)
         ttk.Button(nav, text="Previous", command=self.prev_sample).pack(side=tk.LEFT)
         ttk.Button(nav, text="Next", command=self.next_sample).pack(side=tk.LEFT, padx=4)
+        self.forward_view_toggle = ttk.Checkbutton(
+            nav,
+            text="Forward view (undistorted)",
+            variable=self.forward_view_var,
+            command=self._on_forward_view_toggle,
+            state="disabled",
+        )
+        self.forward_view_toggle.pack(side=tk.RIGHT)
         self.image_label = ttk.Label(nav, text="No accepted sample loaded")
         self.image_label.pack(side=tk.LEFT, padx=12)
 
@@ -319,6 +331,33 @@ class _BaseCalibrationApp:
     # Frame rendering / sample browsing
     # ------------------------------------------------------------------
 
+    def _forward_view_maps(self):
+        """Return the cached forward-view remap LUT, rebuilding if stale."""
+        cal = self.calibrator
+        if cal is None or not cal.calibrated or cal.last_ocam_model is None:
+            return None
+        model = cal.last_ocam_model
+        if self._forward_view_model_id != id(model):
+            self._forward_view_cache = ocam_model.build_forward_view_maps(model)
+            self._forward_view_model_id = id(model)
+        return self._forward_view_cache
+
+    def _apply_forward_view(self, image, corners):
+        """Remap a raw frame to the forward view when the toggle is on."""
+        if not self.forward_view_var.get():
+            return image, corners
+        maps = self._forward_view_maps()
+        if maps is None:
+            return image, corners
+        map_x, map_y = maps
+        src = image.astype(np.uint8) if image.ndim == 2 else image
+        remapped = cv2.remap(src, map_x, map_y, interpolation=cv2.INTER_LINEAR,
+                             borderMode=cv2.BORDER_CONSTANT, borderValue=0)
+        return remapped, None  # corners are in raw-image coords; meaningless on the remap
+
+    def _on_forward_view_toggle(self):
+        self._show_current_sample()
+
     def _render_frame(self, image, corners, caption):
         """Draw one grayscale frame (+ detected points, if any) on the canvas."""
         img = image
@@ -360,9 +399,10 @@ class _BaseCalibrationApp:
         sample = cal.db[self.current_sample_index]
         name = Path(sample.image_path).name
         p_str = ", ".join(f"{v:.2f}" for v in sample.params)
+        img, pts = self._apply_forward_view(sample.image, sample.corners)
         self._render_frame(
-            sample.image,
-            sample.corners,
+            img,
+            pts,
             f"Sample {self.current_sample_index + 1}/{len(cal.db)}: {name}   p=[{p_str}]",
         )
 
@@ -403,6 +443,7 @@ class _BaseCalibrationApp:
                 refine_corners=False,
             )
             self.save_button.configure(state="normal")
+            self.forward_view_toggle.configure(state="normal")
 
             avg = float(np.nanmean(cal.reprojection_err))
             self._set_status(
@@ -537,6 +578,10 @@ class BatchCalibrationApp(_BaseCalibrationApp):
             )
             self.current_sample_index = 0
             self.save_button.configure(state="disabled")
+            self.forward_view_var.set(False)
+            self.forward_view_toggle.configure(state="disabled")
+            self._forward_view_cache = None
+            self._forward_view_model_id = None
             self._write_text(self.log_box, "")
 
             n_rejected = 0
@@ -660,7 +705,8 @@ class LiveCalibrationApp(_BaseCalibrationApp):
                     outcome = "rejected (too similar)"
                 else:
                     outcome = "no markers detected"
-                self._render_frame(image, result.corners, f"Live frame: {outcome}")
+                img, pts = self._apply_forward_view(image, result.corners)
+                self._render_frame(img, pts, f"Live frame: {outcome}")
                 self._set_status(
                     f"Live capture on '{self._subscribed_topic}': "
                     f"{len(self.calibrator.db)} accepted, {self.n_rejected} rejected, "

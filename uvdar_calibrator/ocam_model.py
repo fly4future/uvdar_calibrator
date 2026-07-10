@@ -173,6 +173,118 @@ def cam2world(m: np.ndarray, ocam_model: OCamModel) -> np.ndarray:
     return M / norms
 
 
+#: Defaults for the GUI's forward-facing perspective view. Hardcoded on
+#: purpose (GUI-only visualization with no effect on calibration results);
+#: if adjustability is ever needed, expose these as Tk controls.
+DEFAULT_FORWARD_VIEW_HFOV_DEG = 90.0
+DEFAULT_FORWARD_VIEW_GRID = (120, 90)  # (grid_w, grid_h)
+
+
+def build_forward_view_maps(
+    ocam_model: OCamModel,
+    hfov_deg: float = DEFAULT_FORWARD_VIEW_HFOV_DEG,
+    out_width: Optional[int] = None,
+    out_height: Optional[int] = None,
+    grid_size: Tuple[int, int] = DEFAULT_FORWARD_VIEW_GRID,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Build a ``cv2.remap`` LUT for a forward-facing perspective view.
+
+    The view is a rectilinear crop of ``hfov_deg`` horizontal FOV around
+    the model's own optical axis (the ray that ``(xc, yc)`` back-projects
+    to via :func:`cam2world` -- never an assumed ``[0, 0, +/-1]``, since
+    the sign of ``ss[0]`` decides the hemisphere). Because ``world2cam``'s
+    root-finding is per-point (not vectorized), the maps are computed on a
+    coarse ``grid_size`` grid and upsampled with ``cv2.resize`` -- an
+    acceptable approximation for a visualization LUT that is never used
+    for calibration math.
+
+    Returns ``(map_x, map_y)`` float32 arrays of shape
+    ``(out_height, out_width)`` in the ``cv2.remap`` convention
+    (``map_x`` = source column, ``map_y`` = source row). Pixels whose rays
+    the model cannot project hold the out-of-bounds sentinel ``-1``; remap
+    with ``borderMode=cv2.BORDER_CONSTANT, borderValue=0`` so they render
+    black.
+    """
+    if out_width is None:
+        out_width = int(ocam_model.width)
+    if out_height is None:
+        out_height = int(ocam_model.height)
+
+    # Forward direction and image-axis directions derived from the model
+    # itself: back-project the center pixel and one pixel stepped along
+    # each image axis. Building "right"/"down" from the model (instead of
+    # crossing fwd with an arbitrary world axis) keeps the rendered view's
+    # orientation locked to the raw image -- a fixed reference axis flips
+    # the view left/right when ss[0] < 0 puts fwd at [0, 0, -1].
+    eps = 1.0  # pixel step for the finite-difference directions
+    probes = cam2world(
+        np.array(
+            [
+                [ocam_model.xc, ocam_model.xc, ocam_model.xc + eps],
+                [ocam_model.yc, ocam_model.yc + eps, ocam_model.yc],
+            ],
+            dtype=float,
+        ),
+        ocam_model,
+    )
+    fwd = probes[:, 0] / np.linalg.norm(probes[:, 0])
+
+    # Scene direction of increasing source column ("right" in the raw
+    # image), orthogonalized against fwd.
+    right = probes[:, 1] - fwd
+    right = right - float(np.dot(right, fwd)) * fwd
+    right = right / np.linalg.norm(right)
+
+    # Scene direction of increasing source row ("down"): take the exact
+    # cross-product normal, signed to match the finite-difference probe.
+    down_probe = probes[:, 2] - fwd
+    down = np.cross(fwd, right)
+    if float(np.dot(down, down_probe)) < 0:
+        down = -down
+
+    # Pinhole-normalized ray offsets over the requested FOV (vertical FOV
+    # derived to preserve the output aspect ratio).
+    grid_w, grid_h = grid_size
+    half_u = math.tan(math.radians(hfov_deg) / 2.0)
+    half_v = half_u * out_height / out_width
+    u = np.linspace(-half_u, half_u, grid_w)
+    v = np.linspace(-half_v, half_v, grid_h)
+    uu, vv = np.meshgrid(u, v)
+
+    # world2cam is scale-invariant, so the rays need no normalization.
+    rays = (
+        fwd[:, None]
+        + right[:, None] * uu.ravel()[None, :]
+        + down[:, None] * vv.ravel()[None, :]
+    )
+    m = world2cam(rays, ocam_model)  # m[0, :] = row, m[1, :] = col
+
+    rows = m[0, :].reshape(grid_h, grid_w)
+    cols = m[1, :].reshape(grid_h, grid_w)
+    invalid = ~(np.isfinite(rows) & np.isfinite(cols))
+    rows = np.where(invalid, -1.0, rows).astype(np.float32)
+    cols = np.where(invalid, -1.0, cols).astype(np.float32)
+
+    map_x = cv2.resize(cols, (out_width, out_height), interpolation=cv2.INTER_LINEAR)
+    map_y = cv2.resize(rows, (out_width, out_height), interpolation=cv2.INTER_LINEAR)
+
+    # Upsample the invalid mask alongside the maps: near the valid/invalid
+    # boundary, linear interpolation can blend a -1 sentinel with a valid
+    # neighbor into a coordinate that lands back inside the image and
+    # samples garbage. Blank any pixel that is mostly invalid instead.
+    invalid_frac = cv2.resize(
+        invalid.astype(np.float32),
+        (out_width, out_height),
+        interpolation=cv2.INTER_LINEAR,
+    )
+    blank = invalid_frac > 0.5
+    map_x[blank] = -1.0
+    map_y[blank] = -1.0
+
+    return map_x, map_y
+
+
 # -----------------------------------------------------------------------------
 # Calibration solver
 # -----------------------------------------------------------------------------
