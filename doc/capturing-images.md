@@ -98,7 +98,7 @@ uvdar_calibrator_repo/
 ├── package.xml, setup.py,   # ROS 2 (ament_python) package scaffolding --
 │   setup.cfg, resource/     # only needed if building/running via colcon
 ├── photos/
-│   ├── i_1.bmp
+│   ├── example_01.bmp
 │   ├── center_close.bmp
 │   ├── left_edge.png
 │   ├── top_corner.jpg
@@ -117,7 +117,7 @@ jpg, jpeg, bmp, png, tif, tiff
 Valid example filenames:
 
 ```text
-i_1.bmp
+example_01.bmp
 left_corner.png
 center_close.jpg
 calibration_view_12.tiff
@@ -136,5 +136,5 @@ prefix, use `--base_name`. To use only one image type, use `--extension`. For
 example:
 
 ```bash
-python -m uvdar_calibrator --image_dir photos --base_name i_ --extension bmp --gui
+python -m uvdar_calibrator --image_dir photos --base_name example_ --extension bmp --gui
 ```

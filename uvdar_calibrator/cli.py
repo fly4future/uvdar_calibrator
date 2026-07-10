@@ -151,7 +151,10 @@ def run(
     if not files:
         print("No calibration images were found.")
         print("Example command:")
-        print("  python -m uvdar_calibrator --image_dir photos --base_name i_ --extension bmp")
+        print(
+            "  python -m uvdar_calibrator --image_dir photos "
+            "--base_name example_ --extension bmp"
+        )
         print("Supported extensions: j, jpg, jpeg, bmp, png, tif, tiff, all")
         return None
 

@@ -12,7 +12,7 @@ how readiness is judged — mirrors ROS image_pipeline's `camera_calibration` pa
 (`Calibrator`/`MonoCalibrator` + `is_good_sample`/`compute_goodenough`).
 
 The code lives in the `uvdar_calibrator/` package. There is no test suite, linter config, or
-CI — verify changes by running the CLI/GUI below against `example_photos/` and checking that
+CI — verify changes by running the CLI/GUI below against `example_images/` and checking that
 sample selection, calibration, and export still succeed.
 
 ## Running it
@@ -31,7 +31,7 @@ python -m uvdar_calibrator --image_dir photos
 python -m uvdar_calibrator --image_dir photos --coverage_only --show_coverage
 
 # Filter by filename prefix / extension
-python -m uvdar_calibrator --image_dir photos --base_name i_ --extension bmp --gui
+python -m uvdar_calibrator --image_dir photos --base_name example_ --extension bmp --gui
 ```
 
 ## Architecture
