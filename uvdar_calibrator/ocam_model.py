@@ -1,4 +1,5 @@
-"""OCamCalib (Scaramuzza) omnidirectional camera model and solver math.
+"""
+OCamCalib (Scaramuzza) omnidirectional camera model and solver math.
 
 Faithful, minimally refactored port of the MATLAB toolbox
 ctu-mrs/OCamCalib_UVDAR (itself a UV-LED-grid fork of Scaramuzza's
@@ -19,14 +20,14 @@ Conventions (load-bearing -- do not "fix"):
 
 from __future__ import annotations
 
-import math
-import shutil
 from dataclasses import dataclass
+import math
 from pathlib import Path
-from typing import List, Optional, Sequence, Tuple
+import shutil
+from typing import Optional, Sequence, Tuple
 
-import numpy as np
 import matplotlib.pyplot as plt
+import numpy as np
 
 try:
     import cv2
@@ -660,7 +661,8 @@ def findcenter(
     taylor_order: int,
     ima_proc: Sequence[int],
 ) -> np.ndarray:
-    """Original MATLAB-style exhaustive center search.
+    """
+    Original MATLAB-style exhaustive center search.
 
     Mutates ``ocam_model`` (xc, yc, ss) and returns the recalibrated RRfin.
     """
@@ -894,6 +896,7 @@ def recomp_corner_calib(
 ) -> None:
     """
     Refine detected image points near their current measured locations.
+
     Mutates ``Xp_abs``/``Yp_abs`` in place.
 
     Important safety rule:
@@ -930,7 +933,7 @@ def recomp_corner_calib(
 
     for kk in ima_proc:
         k = _idx(kk)
-        I = images[k].astype(np.uint8)
+        I = images[k].astype(np.uint8)  # noqa: E741 -- MATLAB port keeps upstream's name
 
         # OpenCV cornerSubPix expects points as [col, row]. Existing data stores
         # Xp_abs=row and Yp_abs=col.
@@ -991,10 +994,16 @@ def recomp_corner_calib(
             )
 
         except Exception as exc:
-            print(f"  image {kk}: corner refinement failed ({exc}); keeping original detected points")
+            print(
+                f"  image {kk}: corner refinement failed ({exc}); "
+                "keeping original detected points"
+            )
             kept_total += original_cv.shape[0]
 
-    print(f"Corners recomputed safely. Changed points: {changed_total}, kept/rejected: {kept_total}\nDone")
+    print(
+        f"Corners recomputed safely. Changed points: {changed_total}, "
+        f"kept/rejected: {kept_total}\nDone"
+    )
 
 
 # -----------------------------------------------------------------------------

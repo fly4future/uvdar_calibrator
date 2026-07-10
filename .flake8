@@ -1,0 +1,11 @@
+[flake8]
+# ament_flake8's default configuration (ament_flake8.ini), with the quote
+# style adapted to this codebase: the pre-ROS calibration code uses double
+# quotes throughout, and rewriting every string literal of the solver port
+# for Q000 would be pure churn.
+extend-ignore = B902,C816,D100,D101,D102,D103,D104,D105,D106,D107,D203,D212,D404,I202
+import-order-style = google
+inline-quotes = double
+max-line-length = 99
+show-source = true
+statistics = true

@@ -1,4 +1,5 @@
-"""Pattern detection: chessboard -> circle grid -> UV bright-dot fallback.
+"""
+Pattern detection: chessboard -> circle grid -> UV bright-dot fallback.
 
 The main entry point is :func:`get_corners`, which mirrors the shape of ROS
 camera_calibration's ``get_corners``: ``(ok, corners, board)``. ``corners``
@@ -270,7 +271,6 @@ def _detect_grid_points(
             for x in range(n_sq_x + 1):
                 for y in range(n_sq_y + 1):
     """
-
     if cv2 is None:
         raise RuntimeError("OpenCV is required. Run: pip install opencv-python")
 
@@ -489,7 +489,8 @@ def _detect_grid_points(
     # x-major Xt/Yt ordering.
     elif len(row_groups) == expected_rows and all(len(g) == expected_cols for g in row_groups):
         col_groups = group_by_axis(pts_xy, axis=0, threshold=group_thresh)
-        if len(col_groups) != expected_cols or not all(len(g) == expected_rows for g in col_groups):
+        if (len(col_groups) != expected_cols
+                or not all(len(g) == expected_rows for g in col_groups)):
             print("  UV fallback ordering failed: row/column grouping mismatch")
             return None
 
@@ -537,7 +538,8 @@ def get_corners(
     img: np.ndarray,
     board: LedGridBoard,
 ) -> Tuple[bool, Optional[np.ndarray], LedGridBoard]:
-    """Detect the calibration pattern in one image.
+    """
+    Detect the calibration pattern in one image.
 
     Mirrors ROS camera_calibration's ``get_corners`` return contract:
     ``(ok, corners, board)``. ``corners`` is ``(n_points, 2)`` in

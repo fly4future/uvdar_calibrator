@@ -1,0 +1,39 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>uvdar_calibrator</name>
+  <version>1.0.0</version>
+  <description>
+    OCamCalib-style omnidirectional camera calibration for UV LED grid targets.
+    Workflow architecture mirrors ROS image_pipeline's camera_calibration package
+    (incremental sample selection + live cameracalibrator node); the solver is a
+    port of Scaramuzza's OCamCalib (ctu-mrs/OCamCalib_UVDAR fork).
+  </description>
+  <maintainer email="spurny2@gmail.com">Vojtech Spurny</maintainer>
+  <license>BSD-3-Clause</license>
+  <url type="repository">https://github.com/fly4future/uvdar_calibrator</url>
+  <author email="spurny2@gmail.com">Vojtech Spurny</author>
+
+  <depend>rclpy</depend>
+  <depend>sensor_msgs</depend>
+  <depend>cv_bridge</depend>
+  <depend>python3-opencv</depend>
+  <depend>python3-numpy</depend>
+  <depend>python3-matplotlib</depend>
+  <!-- optional at runtime (.mat export only), simplest as a plain depend -->
+  <depend>python3-scipy</depend>
+
+  <!-- Deliberately NOT depended on, unlike upstream camera_calibration:
+       message_filters (stereo time-sync only; this tool is monocular) and
+       image_geometry (its PinholeCameraModel cannot represent the OCamCalib
+       polynomial model). -->
+
+  <test_depend>ament_copyright</test_depend>
+  <test_depend>ament_flake8</test_depend>
+  <test_depend>ament_pep257</test_depend>
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

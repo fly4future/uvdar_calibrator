@@ -1,4 +1,5 @@
-"""Sample selection and calibration-readiness scoring.
+"""
+Sample selection and calibration-readiness scoring.
 
 The core of this module (``get_parameters`` / ``is_good_sample`` /
 ``compute_goodenough``) is ported from ROS image_pipeline's
@@ -32,9 +33,9 @@ from .board import LedGridBoard
 # frame; the UV LED grid here is smaller in frame and captured from farther
 # away, so these likely need retuning later (do not change casually --
 # retune against real capture sets and observe acceptance behavior).
-DEFAULT_SAMPLE_THRESHOLD = 0.2                 # is_good_sample min L1 param distance
-DEFAULT_PARAM_RANGES = (0.7, 0.7, 0.4, 0.5)    # compute_goodenough target ranges (X, Y, Size, Skew)
-DEFAULT_MIN_DB_SIZE = 40                       # db size that forces goodenough regardless of ranges
+DEFAULT_SAMPLE_THRESHOLD = 0.2               # is_good_sample min L1 param distance
+DEFAULT_PARAM_RANGES = (0.7, 0.7, 0.4, 0.5)  # compute_goodenough targets (X, Y, Size, Skew)
+DEFAULT_MIN_DB_SIZE = 40                     # db size forcing goodenough regardless of ranges
 
 PARAM_NAMES = ("X", "Y", "Size", "Skew")
 
@@ -44,7 +45,8 @@ PARAM_NAMES = ("X", "Y", "Size", "Skew")
 # -----------------------------------------------------------------------------
 
 def outside_corner_indices(n_cols: int, n_rows: int) -> Dict[str, int]:
-    """Flat indices of the four outside corners of the point grid.
+    """
+    Flat indices of the four outside corners of the point grid.
 
     The flat layout is x-major/y-minor: ``idx(x, y) = x * n_rows + y``.
     This traces the same consistent loop around the quadrilateral that
@@ -75,8 +77,11 @@ def _get_outside_corners_xy(
 
 
 def _calculate_area(corners) -> float:
-    """Area of the quadrilateral spanned by the four outside corners
-    (shoelace via the diagonal cross product, as in ROS)."""
+    """
+    Compute the area of the quadrilateral spanned by the four outside corners.
+
+    Shoelace via the diagonal cross product, as in ROS.
+    """
     (up_left, up_right, down_right, down_left) = corners
     a = up_right - up_left
     b = down_right - up_right
@@ -87,7 +92,8 @@ def _calculate_area(corners) -> float:
 
 
 def _calculate_skew(corners) -> float:
-    """Skew: angle deviation from 90 degrees at the up_right outside corner.
+    """
+    Skew: angle deviation from 90 degrees at the up_right outside corner.
 
     0 = no skew, 1 = high skew. As in ROS.
     """
@@ -109,7 +115,8 @@ def get_parameters(
     board: LedGridBoard,
     image_size: Tuple[int, int],
 ) -> List[float]:
-    """Reduce a detected view to ``[p_x, p_y, p_size, skew]``.
+    """
+    Reduce a detected view to ``[p_x, p_y, p_size, skew]``.
 
     ``corners_row_col`` is ``(n_points, 2)`` in ``[row, col]`` order,
     x-major/y-minor. ``image_size`` is ``(width, height)``.
@@ -142,7 +149,8 @@ def is_good_sample(
     db_params: Sequence[Sequence[float]],
     threshold: float = DEFAULT_SAMPLE_THRESHOLD,
 ) -> bool:
-    """True if the sample is sufficiently different from every accepted one.
+    """
+    Return True if the sample is sufficiently different from every accepted one.
 
     An empty database always accepts (as in ROS).
     """
@@ -158,7 +166,8 @@ def compute_goodenough(
     param_ranges: Sequence[float] = DEFAULT_PARAM_RANGES,
     min_db_size: int = DEFAULT_MIN_DB_SIZE,
 ) -> Tuple[bool, List[Tuple[str, float, float, float]]]:
-    """Judge readiness from the min/max range covered by accepted samples.
+    """
+    Judge readiness from the min/max range covered by accepted samples.
 
     Returns ``(goodenough, [(name, lo, hi, progress), ...])`` where progress
     per axis is ``min((hi - lo) / target_range, 1.0)``. "Good enough" means

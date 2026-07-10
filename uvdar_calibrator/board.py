@@ -1,4 +1,5 @@
-"""Calibration target descriptor.
+"""
+Calibration target descriptor.
 
 Analogous to ROS camera_calibration's ``ChessboardInfo``, minus the
 pattern/ArUco fields: there is exactly one pattern kind here, the UV LED
@@ -13,7 +14,8 @@ from dataclasses import dataclass
 
 @dataclass
 class LedGridBoard:
-    """Geometry of the UV LED grid calibration target.
+    """
+    Geometry of the UV LED grid calibration target.
 
     ``n_sq_x``/``n_sq_y`` are square counts (MATLAB/OCamCalib convention);
     the actual point grid is ``(n_sq_x + 1) x (n_sq_y + 1)``.

@@ -1,4 +1,5 @@
-"""Command-line entry point.
+"""
+Command-line entry point.
 
 Mirrors the option-parsing shape of ROS image_pipeline's
 ``nodes/cameracalibrator.py`` (board geometry flags, output dir, no-plots,
@@ -107,7 +108,10 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--coverage_only",
         action="store_true",
-        help="Only feed images through sample selection and print the readiness report; do not calibrate.",
+        help=(
+            "Only feed images through sample selection and print the "
+            "readiness report; do not calibrate."
+        ),
     )
 
     p.add_argument(

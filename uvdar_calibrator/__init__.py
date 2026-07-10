@@ -1,4 +1,5 @@
-"""OCamCalib-style omnidirectional camera calibration for UV LED grids.
+"""
+OCamCalib-style omnidirectional camera calibration for UV LED grids.
 
 Workflow architecture mirrors ROS image_pipeline's ``camera_calibration``
 package (Calibrator engine + incremental sample selection); the solver is a

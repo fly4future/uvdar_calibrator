@@ -1,4 +1,5 @@
-"""GUI-agnostic calibration engine.
+"""
+GUI-agnostic calibration engine.
 
 ``Calibrator`` mirrors the shape of ROS image_pipeline's
 ``Calibrator``/``MonoCalibrator``: a small engine class holding the
@@ -26,11 +27,11 @@ from . import coverage
 from .board import LedGridBoard
 from .detection import get_corners, save_detected_marker_preview
 from .ocam_model import (
-    OCamModel,
     calibrate,
     export_data,
     findcenter,
     findcenter_fast,
+    OCamModel,
     recomp_corner_calib,
     reprojectpoints,
     saving_calib,
@@ -40,6 +41,7 @@ from .ocam_model import (
 @dataclass
 class Sample:
     """One accepted calibration view."""
+
     params: List[float]            # [p_x, p_y, p_size, skew]
     image: np.ndarray              # grayscale image
     corners: np.ndarray            # (n_points, 2) [row, col], flat x-major/y-minor
@@ -49,12 +51,14 @@ class Sample:
 @dataclass
 class FrameResult:
     """Outcome of feeding one photo to Calibrator.handle_frame."""
+
     image_path: str
     detected: bool                             # markers found at all
     accepted: bool                             # added to the sample db
     reason: str                                # human-readable feedback line
     params: Optional[List[float]] = None       # [p_x, p_y, p_size, skew] if detected
     similar_to: Optional[int] = None           # 1-based index of nearest db sample if rejected
+    corners: Optional[np.ndarray] = None       # detected points [row, col] if detected
     progress: List[Tuple[str, float, float, float]] = field(default_factory=list)
     goodenough: bool = False
 
@@ -70,10 +74,16 @@ class Calibrator:
         sample_threshold: float = coverage.DEFAULT_SAMPLE_THRESHOLD,
         param_ranges=coverage.DEFAULT_PARAM_RANGES,
         min_db_size: int = coverage.DEFAULT_MIN_DB_SIZE,
+        save_previews_for_rejected: bool = True,
     ):
         self.board = board
         self.taylor_order = int(taylor_order)
         self.preview_dir = Path(preview_dir) if preview_dir else None
+        # Batch mode keeps the historical behavior (a preview file for every
+        # *detected* image, accepted or not). The live node sets this False so
+        # a camera stream full of rejected near-duplicates doesn't flood the
+        # preview directory with files.
+        self.save_previews_for_rejected = bool(save_previews_for_rejected)
         self.sample_threshold = float(sample_threshold)
         self.param_ranges = tuple(param_ranges)
         self.min_db_size = int(min_db_size)
@@ -108,7 +118,8 @@ class Calibrator:
         return [s.params for s in self.db]
 
     def handle_frame(self, image: np.ndarray, image_path: str = "") -> FrameResult:
-        """Detect markers, decide accept/reject, update self.db.
+        """
+        Detect markers, decide accept/reject, update self.db.
 
         One image == one "frame" (analogue of ROS handle_msg).
         """
@@ -138,12 +149,11 @@ class Calibrator:
                 reason=f"{name}: no markers detected",
             )
 
-        if self.preview_dir is not None:
-            self._save_preview(image, corners, image_path)
-
         params = coverage.get_parameters(corners, self.board, self.image_size)
 
         if not coverage.is_good_sample(params, self.db_params(), self.sample_threshold):
+            if self.preview_dir is not None and self.save_previews_for_rejected:
+                self._save_preview(image, corners, image_path)
             distances = [coverage.param_distance(params, p) for p in self.db_params()]
             nearest = int(np.argmin(distances)) + 1
             return self._result(
@@ -152,12 +162,16 @@ class Calibrator:
                 accepted=False,
                 params=params,
                 similar_to=nearest,
+                corners=corners,
                 reason=(
                     f"{name}: rejected -- too similar to sample {nearest} "
                     f"({Path(self.db[nearest - 1].image_path).name}, "
                     f"distance {min(distances):.3f} <= {self.sample_threshold})"
                 ),
             )
+
+        if self.preview_dir is not None:
+            self._save_preview(image, corners, image_path)
 
         self.db.append(Sample(params=params, image=image, corners=corners, image_path=image_path))
         self.calibrated = False  # db changed; any previous solve is stale
@@ -168,10 +182,14 @@ class Calibrator:
             detected=True,
             accepted=True,
             params=params,
+            corners=corners,
             reason=f"{name}: added as sample {len(self.db)}, p=[{p_str}]",
         )
 
-    def _result(self, image_path, detected, accepted, reason, params=None, similar_to=None) -> FrameResult:
+    def _result(
+        self, image_path, detected, accepted, reason,
+        params=None, similar_to=None, corners=None,
+    ) -> FrameResult:
         self.goodenough, progress = coverage.compute_goodenough(
             self.db_params(), self.param_ranges, self.min_db_size
         )
@@ -182,6 +200,7 @@ class Calibrator:
             reason=reason,
             params=params,
             similar_to=similar_to,
+            corners=corners,
             progress=progress,
             goodenough=self.goodenough,
         )
@@ -231,7 +250,8 @@ class Calibrator:
         fast_find_center: bool = True,
         refine_corners: bool = False,
     ) -> OCamModel:
-        """Run the OCamCalib solve over self.db and set self.calibrated.
+        """
+        Run the OCamCalib solve over self.db and set self.calibrated.
 
         Steps mirror the original workflow: initial calibration -> find
         center -> optional corner refinement -> final calibration.
@@ -324,8 +344,12 @@ class Calibrator:
     # ------------------------------------------------------------------
 
     def report(self) -> str:
-        """Text report: readiness progress + supplementary bin hints
-        (+ reprojection error once calibrated)."""
+        """
+        Render the text report.
+
+        Readiness progress + supplementary bin hints (+ reprojection error
+        once calibrated).
+        """
         goodenough, progress = coverage.compute_goodenough(
             self.db_params(), self.param_ranges, self.min_db_size
         )

@@ -1,4 +1,5 @@
-"""Matplotlib plotting/diagnostics for a completed calibration.
+"""
+Matplotlib plotting/diagnostics for a completed calibration.
 
 All functions here are plotting-only and block on window close, as in the
 original tool. They operate on explicit arrays plus an
@@ -9,12 +10,12 @@ from __future__ import annotations
 
 from typing import Optional, Sequence
 
-import numpy as np
 import matplotlib.pyplot as plt
+import numpy as np
 
 from .ocam_model import (
-    OCamModel,
     _idx,
+    OCamModel,
     omni3d2pixel,
     reprojectpoints_adv,
     world2cam,
@@ -132,9 +133,9 @@ def reproject_calib(
         k = _idx(kk)
 
         if images is not None and k < len(images):
-            I = images[k]
+            I = images[k]  # noqa: E741 -- MATLAB port keeps upstream's name
         else:
-            I = 255 * np.ones(
+            I = 255 * np.ones(  # noqa: E741
                 (
                     ocam_model.height,
                     ocam_model.width,
