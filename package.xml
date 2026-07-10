@@ -9,10 +9,10 @@
     (incremental sample selection + live cameracalibrator node); the solver is a
     port of Scaramuzza's OCamCalib (ctu-mrs/OCamCalib_UVDAR fork).
   </description>
-  <maintainer email="spurny2@gmail.com">Vojtech Spurny</maintainer>
+  <maintainer email="spurny@fly4future.com">Vojtech Spurny</maintainer>
   <license>BSD-3-Clause</license>
   <url type="repository">https://github.com/fly4future/uvdar_calibrator</url>
-  <author email="spurny2@gmail.com">Vojtech Spurny</author>
+  <author email="spurny@fly4future.com">Vojtech Spurny</author>
 
   <depend>rclpy</depend>
   <depend>sensor_msgs</depend>

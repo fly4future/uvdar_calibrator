@@ -13,9 +13,9 @@ setup(
     install_requires=["setuptools"],
     zip_safe=True,
     author="Vojtech Spurny",
-    author_email="spurny2@gmail.com",
+    author_email="spurny@fly4future.com",
     maintainer="Vojtech Spurny",
-    maintainer_email="spurny2@gmail.com",
+    maintainer_email="spurny@fly4future.com",
     keywords=["ROS"],
     classifiers=[
         "Intended Audience :: Developers",
