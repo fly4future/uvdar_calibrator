@@ -711,7 +711,24 @@ def reprojectpoints(
     print(f"\nSum of squared errors\n\n {MSE:f}")
 
     if avg < 1.0:
-        print("\nAverage error is below 1 pixel: OK.\n")
+        if len(ima_proc) < 5:
+            # Reprojection error measures fit-to-training-data, not
+            # generalization -- a calibration from a handful of samples can
+            # look identical (low pixel error, "OK" wording) to a genuinely
+            # good one while actually being overfit. This module has no
+            # knowledge of "goodness"/sample diversity (see module
+            # docstring), so len(ima_proc) is the only diversity proxy
+            # available here; it's a floor, not a substitute for
+            # coverage.compute_goodenough's real range-based check.
+            print(
+                f"\nAverage error is below 1 pixel, but this fit used only "
+                f"{len(ima_proc)} sample(s) -- low reprojection error from a "
+                "small sample set does not mean the calibration will "
+                "generalize; it may simply be overfit. Capture more, more "
+                "varied views before trusting this result.\n"
+            )
+        else:
+            print("\nAverage error is below 1 pixel: OK.\n")
     else:
         print("\nWARNING: average error is above 1 pixel. Check marker extraction/calibration.\n")
 
