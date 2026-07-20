@@ -86,8 +86,8 @@ class _BaseCalibrationApp:
     ):
         self.root = root
         self.root.title("UV-DAR / OCamCalib Calibration Assistant")
-        self.root.geometry("1180x760")
-        self.root.minsize(1000, 650)
+        self.root.geometry("1180x980")
+        self.root.minsize(1000, 870)
 
         self.n_sq_x = tk.IntVar(value=n_sq_x)
         self.n_sq_y = tk.IntVar(value=n_sq_y)
