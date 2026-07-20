@@ -21,7 +21,7 @@ setup(
     author_email="spurny@fly4future.com",
     maintainer="Vojtech Spurny",
     maintainer_email="spurny@fly4future.com",
-    keywords=["ROS"],
+    keywords=["ROS2"],
     classifiers=[
         "Intended Audience :: Developers",
         "License :: OSI Approved :: BSD License",
@@ -34,7 +34,9 @@ setup(
         "image_pipeline's camera_calibration."
     ),
     license="BSD-3-Clause",
-    tests_require=["pytest"],
+    extras_require={
+        'test': ['pytest'],
+    },
     entry_points={
         "console_scripts": [
             "cameracalibrator = uvdar_calibrator.apps.live_node:main",
