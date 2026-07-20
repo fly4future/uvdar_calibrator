@@ -97,6 +97,18 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     )
 
     p.add_argument(
+        "--fov_radius_frac",
+        type=float,
+        default=None,
+        help=(
+            "Radius of the camera's usable image circle (e.g. a fisheye lens "
+            "whose FOV doesn't fill the full sensor rectangle), as a fraction "
+            "of min(width, height)/2, centered on the frame. Default: None, "
+            "meaning the full rectangular frame is assumed usable."
+        ),
+    )
+
+    p.add_argument(
         "--refine_corners",
         action="store_true",
         help=(
@@ -144,6 +156,7 @@ def run(
     refine_corners: bool = False,
     coverage_only: bool = False,
     show_coverage: bool = False,
+    fov_radius_frac: Optional[float] = None,
 ) -> Optional[Calibrator]:
     """Non-GUI workflow: feed photos one-by-one into a Calibrator, then solve."""
     files = find_image_files(image_dir, base_name, extension)
@@ -165,6 +178,7 @@ def run(
         board,
         taylor_order=taylor_order,
         preview_dir=str(Path(image_dir) / "detected_marker_previews"),
+        fov_radius_frac=fov_radius_frac,
     )
 
     print("\nStep 1: Feeding images through sample selection")
@@ -207,7 +221,9 @@ def run(
         metrics = []
         for sample in cal.db:
             m = _coverage.sample_metric(
-                sample.corners, board, cal.image_size, label=Path(sample.image_path).name
+                sample.corners, board, cal.image_size,
+                label=Path(sample.image_path).name,
+                valid_region=cal.valid_region_px(),
             )
             if m is not None:
                 metrics.append(m)
@@ -287,6 +303,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
             taylor_order=args.taylor_order,
             output_dir=args.output_dir,
             slow_find_center=args.slow_find_center,
+            fov_radius_frac=args.fov_radius_frac,
         )
         return
 
@@ -305,6 +322,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         refine_corners=args.refine_corners,
         coverage_only=args.coverage_only,
         show_coverage=args.show_coverage,
+        fov_radius_frac=args.fov_radius_frac,
     )
 
 

@@ -9,9 +9,13 @@ laid out x-major/y-minor (outer loop over board x, inner loop over board y)
 rather than ROS's row-major ``(rows, cols)`` grids.
 
 Every detected view is reduced to four normalized numbers
-``[p_x, p_y, p_size, skew]``. A new sample is only accepted if its L1
-distance from every already-accepted sample exceeds a threshold; readiness
-is the min/max range covered by accepted samples on each axis.
+``[p_x, p_y, p_size, skew]`` (optionally normalized against a fisheye
+lens's usable image circle rather than the full rectangular frame -- see
+``valid_region`` on ``get_parameters``/``sample_metric``). A new sample is
+accepted if its L1 distance from every already-accepted sample exceeds a
+threshold, or if it meaningfully extends the covered range on any single
+axis (see ``is_good_sample``); readiness is the min/max range covered by
+accepted samples on each axis.
 
 The bin-based classification at the bottom of this module (COVERAGE_*_BINS
 etc.) predates the ROS-style selection and is kept only as a supplementary
@@ -28,14 +32,24 @@ import numpy as np
 
 from .board import LedGridBoard
 
-# NOTE: ROS camera_calibration defaults, carried over unchanged. They were
-# tuned for a hand-held checkerboard filling much of a pinhole camera's
-# frame; the UV LED grid here is smaller in frame and captured from farther
-# away, so these likely need retuning later (do not change casually --
-# retune against real capture sets and observe acceptance behavior).
-DEFAULT_SAMPLE_THRESHOLD = 0.2               # is_good_sample min L1 param distance
-DEFAULT_PARAM_RANGES = (0.7, 0.7, 0.4, 0.5)  # compute_goodenough targets (X, Y, Size, Skew)
-DEFAULT_MIN_DB_SIZE = 40                     # db size forcing goodenough regardless of ranges
+# NOTE: ROS camera_calibration defaults, tuned for a hand-held checkerboard
+# filling much of a pinhole camera's frame. The UV LED grid here is smaller
+# in frame and captured from farther away, so Size/threshold are eased
+# modestly relative to the ROS originals (do not change further casually --
+# retune against real capture sets and observe acceptance behavior). X/Y
+# stay closer to the ROS originals because get_parameters can now normalize
+# against the camera's actual usable FOV circle (see valid_region) instead
+# of the full rectangular frame, which is the real fix for a fisheye lens
+# whose reachable board positions are narrower than the sensor rectangle.
+DEFAULT_SAMPLE_THRESHOLD = 0.15               # is_good_sample min L1 param distance
+DEFAULT_PARAM_RANGES = (0.6, 0.6, 0.3, 0.45)  # compute_goodenough targets (X, Y, Size, Skew)
+DEFAULT_MIN_DB_SIZE = 40                      # db size forcing goodenough regardless of ranges
+
+# Minimum margin by which a candidate must exceed the current accepted
+# min/max on an axis to count as a genuine range extension in
+# is_good_sample, rather than sensor-noise jitter at an already-covered
+# extreme.
+MIN_RANGE_EXTENSION = 0.02
 
 PARAM_NAMES = ("X", "Y", "Size", "Skew")
 
@@ -114,12 +128,21 @@ def get_parameters(
     corners_row_col: np.ndarray,
     board: LedGridBoard,
     image_size: Tuple[int, int],
+    valid_region: Optional[Tuple[float, float, float]] = None,
 ) -> List[float]:
     """
     Reduce a detected view to ``[p_x, p_y, p_size, skew]``.
 
     ``corners_row_col`` is ``(n_points, 2)`` in ``[row, col]`` order,
     x-major/y-minor. ``image_size`` is ``(width, height)``.
+
+    ``valid_region``, if given, is ``(cx, cy, radius)`` in pixels: the
+    camera's actual usable image circle (e.g. a fisheye lens whose FOV
+    doesn't fill the full rectangular sensor). X/Y/Size are then normalized
+    against that circle's bounding square instead of the full image, so a
+    target range like 0.7 means "70% of what's actually reachable" rather
+    than an unreachable fraction of the full frame. Defaults to ``None``,
+    which reproduces the previous full-rectangle normalization exactly.
     """
     width, height = image_size
     corners_xy = np.asarray(corners_row_col, dtype=float)[:, ::-1]  # (row,col) -> (x,y)
@@ -128,13 +151,21 @@ def get_parameters(
     area = _calculate_area(oc)
     skew = _calculate_skew(oc)
 
+    if valid_region is not None:
+        cx, cy, radius = valid_region
+        x0, y0 = cx - radius, cy - radius
+        eff_width, eff_height = 2.0 * radius, 2.0 * radius
+    else:
+        x0, y0 = 0.0, 0.0
+        eff_width, eff_height = float(width), float(height)
+
     border = math.sqrt(area)
     # For X and Y, we "shrink" the image all around by approx. half the board
     # size. Otherwise large boards are penalized because you can't get much
     # X/Y variation. (Comment and formula as in ROS.)
-    p_x = min(1.0, max(0.0, (float(np.mean(corners_xy[:, 0])) - border / 2.0) / (width - border)))
-    p_y = min(1.0, max(0.0, (float(np.mean(corners_xy[:, 1])) - border / 2.0) / (height - border)))
-    p_size = math.sqrt(area / (width * height))
+    p_x = min(1.0, max(0.0, (float(np.mean(corners_xy[:, 0])) - x0 - border / 2.0) / (eff_width - border)))
+    p_y = min(1.0, max(0.0, (float(np.mean(corners_xy[:, 1])) - y0 - border / 2.0) / (eff_height - border)))
+    p_size = math.sqrt(area / (eff_width * eff_height))
 
     return [p_x, p_y, p_size, skew]
 
@@ -152,13 +183,34 @@ def is_good_sample(
     """
     Return True if the sample is sufficiently different from every accepted one.
 
-    An empty database always accepts (as in ROS).
+    An empty database always accepts (as in ROS). Beyond the plain L1-distance
+    check (ROS's original criterion), a sample is also accepted if it
+    meaningfully extends the current per-axis min or max of db_params by more
+    than MIN_RANGE_EXTENSION. The L1 check compares the *whole* parameter
+    vector, so a frame that pushes one axis (e.g. X) to a new extreme can
+    still be rejected as "too similar" if its other axes (Size, Skew, ...)
+    happen to resemble an already-accepted sample -- which silently blocks
+    exactly the images compute_goodenough needs to reach 100% progress on
+    that axis. This extension check restores those range-growing frames
+    without opening the door to sensor-noise duplicates, which won't clear
+    the MIN_RANGE_EXTENSION margin.
     """
     if not db_params:
         return True
 
     d = min(param_distance(params, p) for p in db_params)
-    return d > threshold
+    if d > threshold:
+        return True
+
+    all_params = [list(p) for p in db_params]
+    for i, value in enumerate(params):
+        axis_values = [p[i] for p in all_params]
+        if value > max(axis_values) + MIN_RANGE_EXTENSION:
+            return True
+        if value < min(axis_values) - MIN_RANGE_EXTENSION:
+            return True
+
+    return False
 
 
 def compute_goodenough(
@@ -272,8 +324,15 @@ def sample_metric(
     board: LedGridBoard,
     image_size: Tuple[int, int],
     label: str = "",
+    valid_region: Optional[Tuple[float, float, float]] = None,
 ) -> Optional[dict]:
-    """Classify one detected view into x/y/size/skew/quadrant bins."""
+    """
+    Classify one detected view into x/y/size/skew/quadrant bins.
+
+    ``valid_region``, if given, is ``(cx, cy, radius)`` in pixels -- see
+    ``get_parameters`` for why. Defaults to ``None`` (full image), matching
+    previous behavior exactly.
+    """
     corners = np.asarray(corners_row_col, dtype=float)
     rows = corners[:, 0]
     cols = corners[:, 1]
@@ -283,11 +342,18 @@ def sample_metric(
 
     rows = rows[ok]
     cols = cols[ok]
-    width = float(image_size[0])
-    height = float(image_size[1])
 
-    x_center = float(np.mean(cols) / max(width, 1.0))
-    y_center = float(np.mean(rows) / max(height, 1.0))
+    if valid_region is not None:
+        cx, cy, radius = valid_region
+        x0, y0 = cx - radius, cy - radius
+        width = height = 2.0 * radius
+    else:
+        x0, y0 = 0.0, 0.0
+        width = float(image_size[0])
+        height = float(image_size[1])
+
+    x_center = float((np.mean(cols) - x0) / max(width, 1.0))
+    y_center = float((np.mean(rows) - y0) / max(height, 1.0))
     bbox_w = float(np.max(cols) - np.min(cols))
     bbox_h = float(np.max(rows) - np.min(rows))
     size = float(np.sqrt(max(bbox_w * bbox_h, 0.0) / max(width * height, 1.0)))

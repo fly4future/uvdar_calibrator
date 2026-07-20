@@ -75,6 +75,7 @@ class Calibrator:
         param_ranges=coverage.DEFAULT_PARAM_RANGES,
         min_db_size: int = coverage.DEFAULT_MIN_DB_SIZE,
         save_previews_for_rejected: bool = True,
+        fov_radius_frac: Optional[float] = None,
     ):
         self.board = board
         self.taylor_order = int(taylor_order)
@@ -87,6 +88,11 @@ class Calibrator:
         self.sample_threshold = float(sample_threshold)
         self.param_ranges = tuple(param_ranges)
         self.min_db_size = int(min_db_size)
+        # Fraction of min(width, height)/2 covered by the camera's usable
+        # (e.g. fisheye) image circle, assumed centered on the frame. None
+        # (default) means "use the full rectangular frame" -- see
+        # coverage.get_parameters' valid_region for why this matters.
+        self.fov_radius_frac = float(fov_radius_frac) if fov_radius_frac is not None else None
 
         self.db: List[Sample] = []
         self.goodenough = False
@@ -116,6 +122,15 @@ class Calibrator:
 
     def db_params(self) -> List[List[float]]:
         return [s.params for s in self.db]
+
+    def valid_region_px(self) -> Optional[Tuple[float, float, float]]:
+        """(cx, cy, radius) in pixels, or None for the full rectangular frame."""
+        if self.fov_radius_frac is None or self.image_size is None:
+            return None
+        width, height = self.image_size
+        cx, cy = width / 2.0, height / 2.0
+        radius = self.fov_radius_frac * min(width, height) / 2.0
+        return (cx, cy, radius)
 
     def handle_frame(self, image: np.ndarray, image_path: str = "") -> FrameResult:
         """
@@ -149,7 +164,9 @@ class Calibrator:
                 reason=f"{name}: no markers detected",
             )
 
-        params = coverage.get_parameters(corners, self.board, self.image_size)
+        params = coverage.get_parameters(
+            corners, self.board, self.image_size, valid_region=self.valid_region_px()
+        )
 
         if not coverage.is_good_sample(params, self.db_params(), self.sample_threshold):
             if self.preview_dir is not None and self.save_previews_for_rejected:
@@ -362,6 +379,7 @@ class Calibrator:
                 self.board,
                 self.image_size,
                 label=Path(sample.image_path).name or str(i),
+                valid_region=self.valid_region_px(),
             )
             if m is not None:
                 metrics.append(m)

@@ -82,6 +82,7 @@ class _BaseCalibrationApp:
         taylor_order: int = 4,
         output_dir: str = ".",
         slow_find_center: bool = False,
+        fov_radius_frac: float | None = None,
     ):
         self.root = root
         self.root.title("UV-DAR / OCamCalib Calibration Assistant")
@@ -94,6 +95,9 @@ class _BaseCalibrationApp:
         self.taylor_order = tk.IntVar(value=taylor_order)
         self.output_dir = tk.StringVar(value=output_dir)
         self.slow_find_center = tk.BooleanVar(value=slow_find_center)
+        # Fixed camera/lens property (e.g. fisheye FOV radius); set once at
+        # launch, not exposed as a widget -- see coverage.get_parameters.
+        self.fov_radius_frac = fov_radius_frac
         self.no_plots = tk.BooleanVar(value=True)
         self.forward_view_var = tk.BooleanVar(value=False)
 
@@ -269,6 +273,7 @@ class _BaseCalibrationApp:
             m = coverage.sample_metric(
                 sample.corners, cal.board, cal.image_size,
                 label=Path(sample.image_path).name,
+                valid_region=cal.valid_region_px(),
             )
             if m is not None:
                 metrics.append(m)
@@ -575,6 +580,7 @@ class BatchCalibrationApp(_BaseCalibrationApp):
                 board,
                 taylor_order=int(self.taylor_order.get()),
                 preview_dir=str(Path(self.image_dir.get()) / "detected_marker_previews"),
+                fov_radius_frac=self.fov_radius_frac,
             )
             self.current_sample_index = 0
             self.save_button.configure(state="disabled")
@@ -737,6 +743,7 @@ def launch_gui(
     taylor_order: int = 4,
     output_dir: str = ".",
     slow_find_center: bool = False,
+    fov_radius_frac: float | None = None,
 ) -> None:
     """Launch the interactive batch (folder-based) calibration GUI."""
     _require_gui_deps()
@@ -752,6 +759,7 @@ def launch_gui(
         taylor_order=taylor_order,
         output_dir=output_dir,
         slow_find_center=slow_find_center,
+        fov_radius_frac=fov_radius_frac,
     )
     root.mainloop()
 

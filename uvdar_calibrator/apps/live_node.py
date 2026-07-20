@@ -265,6 +265,14 @@ def _build_arg_parser() -> argparse.ArgumentParser:
                        "dropped before detection; consecutive live frames are "
                        f"near-duplicates anyway. Default: {DEFAULT_RATE_HZ}."
                    ))
+    p.add_argument("--fov_radius_frac", type=float, default=None,
+                   help=(
+                       "Radius of the camera's usable image circle (e.g. a fisheye "
+                       "lens whose FOV doesn't fill the full sensor rectangle), as a "
+                       "fraction of min(width, height)/2, centered on the frame. "
+                       "Default: None, meaning the full rectangular frame is assumed "
+                       "usable."
+                   ))
     return p
 
 
@@ -286,6 +294,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         # A live stream produces an endless supply of detected-but-rejected
         # near-duplicates; only write preview files for accepted samples.
         save_previews_for_rejected=False,
+        fov_radius_frac=args.fov_radius_frac,
     )
 
     raw_queue: Queue = BufferQueue(maxsize=1)
