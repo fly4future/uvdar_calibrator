@@ -68,6 +68,55 @@ def _as_col(v: np.ndarray) -> np.ndarray:
 # Projection functions
 # -----------------------------------------------------------------------------
 
+def _solve_poly_root_per_sample(
+    poly_coef: np.ndarray,
+    m: np.ndarray,
+    max_real_root: Optional[float] = None,
+    pick_min_on_multiple: bool = False,
+) -> np.ndarray:
+    """
+    Shared root-finding core for omni3d2pixel and invFUN.
+
+    For each sample ``m[j]``, shifts ``poly_coef``'s second-to-last
+    coefficient by ``m[j]`` and solves for real, positive roots via
+    ``np.roots``. Returns NaN for a sample with no unique accepted root
+    (checked via ``np.isfinite``/``np.isnan`` by every caller, so NaN is
+    the correct "unresolved" sentinel regardless of caller).
+
+    omni3d2pixel and invFUN genuinely disagree on two points, verified
+    against synthetic test data (single-root, multi-root, and
+    radius-bounded cases) before this was extracted, so both are explicit
+    parameters rather than a shared default -- unifying them silently
+    would be a behavior change, not a refactor:
+
+    - invFUN additionally bounds accepted roots to ``(0, max_real_root)``;
+      omni3d2pixel has no such bound (``max_real_root=None``).
+    - When multiple valid roots exist for a sample, omni3d2pixel picks
+      the smallest (``pick_min_on_multiple=True``); invFUN leaves that
+      sample unresolved instead of guessing (``pick_min_on_multiple=False``).
+    """
+    result = np.full_like(m, np.nan, dtype=float)
+
+    for j, mj in enumerate(m):
+        poly_tmp = poly_coef.copy()
+        poly_tmp[-2] = poly_coef[-2] - mj
+
+        roots = np.roots(poly_tmp)
+
+        mask = (np.abs(np.imag(roots)) < 1e-9) & (np.real(roots) > 0)
+        if max_real_root is not None:
+            mask &= np.real(roots) < max_real_root
+
+        real_pos = np.real(roots[mask])
+
+        if real_pos.size == 1:
+            result[j] = real_pos[0]
+        elif real_pos.size > 1 and pick_min_on_multiple:
+            result[j] = np.min(real_pos)
+
+    return result
+
+
 def omni3d2pixel(
     ss: Sequence[float],
     xx: np.ndarray,
@@ -88,24 +137,7 @@ def omni3d2pixel(
 
     poly_coef = ss[::-1].copy()
 
-    rho = np.full_like(m, np.nan, dtype=float)
-
-    for j, mj in enumerate(m):
-        poly_tmp = poly_coef.copy()
-        poly_tmp[-2] = poly_coef[-2] - mj
-
-        roots = np.roots(poly_tmp)
-
-        real_pos = roots[
-            (np.abs(np.imag(roots)) < 1e-9)
-            & (np.real(roots) > 0)
-        ]
-        real_pos = np.real(real_pos)
-
-        if real_pos.size == 1:
-            rho[j] = real_pos[0]
-        elif real_pos.size > 1:
-            rho[j] = np.min(real_pos)
+    rho = _solve_poly_root_per_sample(poly_coef, m, pick_min_on_multiple=True)
 
     x = xx[0, :] / denom * rho
     y = xx[1, :] / denom * rho
@@ -1146,26 +1178,11 @@ def invFUN(
     ss = np.asarray(ss, dtype=float).ravel()
     poly_coef = ss[::-1].copy()
 
-    r = np.full_like(m, np.inf, dtype=float)
-
-    for j, mj in enumerate(m):
-        poly_tmp = poly_coef.copy()
-        poly_tmp[-2] = poly_coef[-2] - mj
-
-        roots = np.roots(poly_tmp)
-
-        res = np.real(
-            roots[
-                (np.abs(np.imag(roots)) < 1e-9)
-                & (np.real(roots) > 0)
-                & (np.real(roots) < radius)
-            ]
-        )
-
-        if res.size == 1:
-            r[j] = res[0]
-
-    return r
+    # Sole caller (findinvpoly2) filters with np.isfinite, which excludes
+    # NaN exactly the same way it excluded the old Inf sentinel -- pick_min
+    # stays False, preserving "leave ambiguous multi-root samples
+    # unresolved" (unlike omni3d2pixel, which picks the smallest root).
+    return _solve_poly_root_per_sample(poly_coef, m, max_real_root=radius)
 
 
 def findinvpoly2(
