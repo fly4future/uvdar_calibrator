@@ -131,6 +131,17 @@ class Calibrator:
         config = config or CalibratorConfig()
         self.board = board
         self.taylor_order = int(config.taylor_order)
+        if self.taylor_order < 4:
+            # ocam_model.omni_find_parameters_fun hardcodes min_order=4; a
+            # lower value here doesn't error there, it silently produces a
+            # truncated ss polynomial with degraded accuracy. Enforced once,
+            # here, since this is the shared construction point for the CLI,
+            # live node, and GUI (whose Spinbox(from_=4) already prevents
+            # this in practice, but shouldn't be the only thing that does).
+            raise ValueError(
+                f"taylor_order must be >= 4 (got {self.taylor_order}); "
+                "the solver's omni_find_parameters_fun hardcodes a minimum order of 4."
+            )
         self.preview_dir = Path(config.preview_dir) if config.preview_dir else None
         # Batch mode keeps the historical behavior (a preview file for every
         # *detected* image, accepted or not). The live node sets this False so
