@@ -141,3 +141,9 @@ when not ready); SAVE/EXPORT by `calibrated`.
   for this x-major flat layout (`idx(x, y) = x * n_rows + y`).
 - `n_sq_x`/`n_sq_y` are square counts; the actual point grid is `(n_sq_x+1) x (n_sq_y+1)`
   (`LedGridBoard.n_cols`/`n_rows`).
+- Following from the `[row, col]` point convention above, `OCamModel.xc`/`.ss` "X" throughout
+  the solver (`calibrate`, `omni_find_parameters_fun`, `reprojectpoints`, `omni3d2pixel`) means
+  the **row** axis, and `.yc` means the **col** axis — the reverse of the naive width/height
+  pairing. `Calibrator.cal_fromcorners`'s initial guess is correctly `xc=height/2.0,
+  yc=width/2.0`, not the other way around; this has been verified by tracing the pairing through
+  every solver function that reads it.

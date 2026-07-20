@@ -348,6 +348,14 @@ class Calibrator:
         width, height = self.image_size
         Xp_abs, Yp_abs, ima_proc = self.assemble()
 
+        # xc paired with height and yc with width looks backwards at a glance
+        # (naive expectation: xc/width, yc/height) but is correct -- verified
+        # by tracing the pairing through calibrate(), omni_find_parameters_fun,
+        # and reprojectpoints, which all consistently treat "xc"/"X" as the
+        # row axis. This matches assemble(): Xp_abs = corners[:, 0] is row
+        # data (ranges over height), Yp_abs = corners[:, 1] is col data
+        # (ranges over width). Do not "fix" this to xc=width/2.0 -- that
+        # would silently break calibration, not correct it.
         model = OCamModel(
             xc=height / 2.0,
             yc=width / 2.0,
