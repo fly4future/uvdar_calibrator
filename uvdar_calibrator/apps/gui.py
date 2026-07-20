@@ -900,9 +900,11 @@ def launch_live_gui(
         subscribe_fn=subscribe_fn,
         initial_topic=initial_topic,
         # The live Calibrator is already built (by live_node.py's main());
-        # this only seeds the (disabled, display-only) board/taylor widgets.
+        # this seeds the (disabled, display-only) board/taylor widgets and
+        # keeps self.calib_config in sync with the real running Calibrator,
+        # not defaults, in case anything ever reads it on the live path.
         board=calibrator.board,
-        config=CalibratorConfig(taylor_order=calibrator.taylor_order),
+        config=CalibratorConfig.from_calibrator(calibrator),
         output_dir=output_dir,
         slow_find_center=slow_find_center,
     )

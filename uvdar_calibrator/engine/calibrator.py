@@ -99,6 +99,30 @@ class CalibratorConfig:
     # threshold, not a retention limit.
     max_accepted_samples: Optional[int] = None
 
+    @classmethod
+    def from_calibrator(cls, calibrator: Calibrator) -> CalibratorConfig:
+        """
+        Reconstruct the config a live Calibrator was built with, by reading
+        its instance attributes back.
+
+        For callers that need a CalibratorConfig reflecting an
+        already-running Calibrator's actual settings (e.g. the live GUI,
+        which seeds its own launch-time-only config from the Calibrator
+        live_node.py already built) rather than defaults -- listing each
+        field individually at the call site is exactly the kind of
+        duplication CalibratorConfig itself exists to avoid.
+        """
+        return cls(
+            taylor_order=calibrator.taylor_order,
+            preview_dir=str(calibrator.preview_dir) if calibrator.preview_dir else None,
+            sample_threshold=calibrator.sample_threshold,
+            param_ranges=calibrator.param_ranges,
+            min_db_size=calibrator.min_db_size,
+            save_previews_for_rejected=calibrator.save_previews_for_rejected,
+            fov_radius_frac=calibrator.fov_radius_frac,
+            max_accepted_samples=calibrator.max_accepted_samples,
+        )
+
 
 class Calibrator:
     """Incremental sample collection + OCamCalib solve over accepted samples."""

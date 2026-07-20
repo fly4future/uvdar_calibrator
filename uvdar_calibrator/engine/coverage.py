@@ -124,6 +124,28 @@ def _calculate_skew(corners) -> float:
     return min(1.0, 2.0 * abs((math.pi / 2.0) - angle(up_left, up_right, down_right)))
 
 
+def _resolve_valid_region(
+    valid_region: Optional[Tuple[float, float, float]],
+    image_size: Tuple[int, int],
+) -> Tuple[float, float, float, float]:
+    """
+    Map an optional ``(cx, cy, radius)`` fisheye valid_region to
+    ``(x0, y0, eff_width, eff_height)`` -- the top-left origin and
+    effective normalization size shared by get_parameters and
+    sample_metric. Both need the identical mapping (one for accept/reject
+    gating, the other for the bin-hint display/coverage graph); keeping it
+    in one place means they can't silently drift apart on a future change
+    to the normalization convention. Falls back to the full image
+    rectangle when ``valid_region`` is None.
+    """
+    if valid_region is not None:
+        cx, cy, radius = valid_region
+        return cx - radius, cy - radius, 2.0 * radius, 2.0 * radius
+
+    width, height = image_size
+    return 0.0, 0.0, float(width), float(height)
+
+
 def get_parameters(
     corners_row_col: np.ndarray,
     board: LedGridBoard,
@@ -144,20 +166,13 @@ def get_parameters(
     than an unreachable fraction of the full frame. Defaults to ``None``,
     which reproduces the previous full-rectangle normalization exactly.
     """
-    width, height = image_size
     corners_xy = np.asarray(corners_row_col, dtype=float)[:, ::-1]  # (row,col) -> (x,y)
 
     oc = _get_outside_corners_xy(corners_xy, board)
     area = _calculate_area(oc)
     skew = _calculate_skew(oc)
 
-    if valid_region is not None:
-        cx, cy, radius = valid_region
-        x0, y0 = cx - radius, cy - radius
-        eff_width, eff_height = 2.0 * radius, 2.0 * radius
-    else:
-        x0, y0 = 0.0, 0.0
-        eff_width, eff_height = float(width), float(height)
+    x0, y0, eff_width, eff_height = _resolve_valid_region(valid_region, image_size)
 
     border = math.sqrt(area)
     # For X and Y, we "shrink" the image all around by approx. half the board
@@ -343,14 +358,7 @@ def sample_metric(
     rows = rows[ok]
     cols = cols[ok]
 
-    if valid_region is not None:
-        cx, cy, radius = valid_region
-        x0, y0 = cx - radius, cy - radius
-        width = height = 2.0 * radius
-    else:
-        x0, y0 = 0.0, 0.0
-        width = float(image_size[0])
-        height = float(image_size[1])
+    x0, y0, width, height = _resolve_valid_region(valid_region, image_size)
 
     x_center = float((np.mean(cols) - x0) / max(width, 1.0))
     y_center = float((np.mean(rows) - y0) / max(height, 1.0))
