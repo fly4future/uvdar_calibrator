@@ -12,11 +12,12 @@ expected and is what produces a diverse calibration set.
 from __future__ import annotations
 
 import argparse
+from dataclasses import replace
 from pathlib import Path
 from typing import Optional, Sequence
 
 from ..engine.board import LedGridBoard
-from ..engine.calibrator import Calibrator
+from ..engine.calibrator import Calibrator, CalibratorConfig
 from ..engine.detection import find_image_files, read_image_gray
 
 
@@ -145,10 +146,8 @@ def run(
     image_dir: str,
     base_name: str = "",
     extension: str = "all",
-    n_sq_x: int = 6,
-    n_sq_y: int = 4,
-    spacing_mm: float = 50.0,
-    taylor_order: int = 4,
+    board: Optional[LedGridBoard] = None,
+    config: Optional[CalibratorConfig] = None,
     output_dir: str = ".",
     do_plots: bool = True,
     do_find_center: bool = True,
@@ -156,7 +155,6 @@ def run(
     refine_corners: bool = False,
     coverage_only: bool = False,
     show_coverage: bool = False,
-    fov_radius_frac: Optional[float] = None,
 ) -> Optional[Calibrator]:
     """Non-GUI workflow: feed photos one-by-one into a Calibrator, then solve."""
     files = find_image_files(image_dir, base_name, extension)
@@ -173,13 +171,12 @@ def run(
 
     print(f"Found {len(files)} image(s).")
 
-    board = LedGridBoard(n_sq_x=n_sq_x, n_sq_y=n_sq_y, spacing_mm=spacing_mm)
-    cal = Calibrator(
-        board,
-        taylor_order=taylor_order,
+    board = board or LedGridBoard()
+    run_config = replace(
+        config or CalibratorConfig(),
         preview_dir=str(Path(image_dir) / "detected_marker_previews"),
-        fov_radius_frac=fov_radius_frac,
     )
+    cal = Calibrator(board, run_config)
 
     print("\nStep 1: Feeding images through sample selection")
     print(f"pattern size {board.n_cols}x{board.n_rows}")
@@ -290,6 +287,12 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     parser = _build_arg_parser()
     args = parser.parse_args(argv)
 
+    board = LedGridBoard(n_sq_x=args.n_sq_x, n_sq_y=args.n_sq_y, spacing_mm=args.spacing_mm)
+    config = CalibratorConfig(
+        taylor_order=args.taylor_order,
+        fov_radius_frac=args.fov_radius_frac,
+    )
+
     if args.gui:
         from .gui import launch_gui
 
@@ -297,13 +300,10 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
             image_dir=args.image_dir,
             base_name=args.base_name,
             extension=args.extension,
-            n_sq_x=args.n_sq_x,
-            n_sq_y=args.n_sq_y,
-            spacing_mm=args.spacing_mm,
-            taylor_order=args.taylor_order,
+            board=board,
+            config=config,
             output_dir=args.output_dir,
             slow_find_center=args.slow_find_center,
-            fov_radius_frac=args.fov_radius_frac,
         )
         return
 
@@ -311,10 +311,8 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         image_dir=args.image_dir,
         base_name=args.base_name,
         extension=args.extension,
-        n_sq_x=args.n_sq_x,
-        n_sq_y=args.n_sq_y,
-        spacing_mm=args.spacing_mm,
-        taylor_order=args.taylor_order,
+        board=board,
+        config=config,
         output_dir=args.output_dir,
         do_plots=not args.no_plots,
         do_find_center=not args.skip_find_center,
@@ -322,7 +320,6 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         refine_corners=args.refine_corners,
         coverage_only=args.coverage_only,
         show_coverage=args.show_coverage,
-        fov_radius_frac=args.fov_radius_frac,
     )
 
 

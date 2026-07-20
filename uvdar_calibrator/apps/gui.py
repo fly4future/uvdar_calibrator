@@ -24,6 +24,7 @@ class so the apps never diverge.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 import queue
 
@@ -32,7 +33,7 @@ import numpy as np
 from ..engine import coverage
 from ..engine import ocam_model
 from ..engine.board import LedGridBoard
-from ..engine.calibrator import Calibrator
+from ..engine.calibrator import Calibrator, CalibratorConfig
 from ..engine.detection import find_image_files, read_image_gray
 
 try:
@@ -76,28 +77,31 @@ class _BaseCalibrationApp:
     def __init__(
         self,
         root,
-        n_sq_x: int = 6,
-        n_sq_y: int = 4,
-        spacing_mm: float = 50.0,
-        taylor_order: int = 4,
+        board: LedGridBoard | None = None,
+        config: CalibratorConfig | None = None,
         output_dir: str = ".",
         slow_find_center: bool = False,
-        fov_radius_frac: float | None = None,
     ):
+        board = board or LedGridBoard()
+        config = config or CalibratorConfig()
+
         self.root = root
         self.root.title("UV-DAR / OCamCalib Calibration Assistant")
         self.root.geometry("1180x980")
         self.root.minsize(1000, 870)
 
-        self.n_sq_x = tk.IntVar(value=n_sq_x)
-        self.n_sq_y = tk.IntVar(value=n_sq_y)
-        self.spacing_mm = tk.DoubleVar(value=spacing_mm)
-        self.taylor_order = tk.IntVar(value=taylor_order)
+        self.n_sq_x = tk.IntVar(value=board.n_sq_x)
+        self.n_sq_y = tk.IntVar(value=board.n_sq_y)
+        self.spacing_mm = tk.DoubleVar(value=board.spacing_mm)
+        self.taylor_order = tk.IntVar(value=config.taylor_order)
         self.output_dir = tk.StringVar(value=output_dir)
         self.slow_find_center = tk.BooleanVar(value=slow_find_center)
-        # Fixed camera/lens property (e.g. fisheye FOV radius); set once at
-        # launch, not exposed as a widget -- see coverage.get_parameters.
-        self.fov_radius_frac = fov_radius_frac
+        # Advanced/launch-time-only settings (fov_radius_frac, sample
+        # selection tuning, ...) that aren't exposed as widgets -- set once
+        # at launch, merged with the live board/taylor_order widget values
+        # when a Calibrator is actually constructed. See
+        # coverage.get_parameters for why fov_radius_frac matters.
+        self.calib_config = config
         self.no_plots = tk.BooleanVar(value=True)
         self.forward_view_var = tk.BooleanVar(value=False)
 
@@ -668,12 +672,12 @@ class BatchCalibrationApp(_BaseCalibrationApp):
                 n_sq_y=int(self.n_sq_y.get()),
                 spacing_mm=float(self.spacing_mm.get()),
             )
-            self.calibrator = Calibrator(
-                board,
+            run_config = replace(
+                self.calib_config,
                 taylor_order=int(self.taylor_order.get()),
                 preview_dir=str(Path(self.image_dir.get()) / "detected_marker_previews"),
-                fov_radius_frac=self.fov_radius_frac,
             )
+            self.calibrator = Calibrator(board, run_config)
             self.current_sample_index = 0
             self.save_button.configure(state="disabled")
             self.forward_view_var.set(False)
@@ -853,13 +857,10 @@ def launch_gui(
     image_dir: str = "photos",
     base_name: str = "",
     extension: str = "all",
-    n_sq_x: int = 6,
-    n_sq_y: int = 4,
-    spacing_mm: float = 50.0,
-    taylor_order: int = 4,
+    board: LedGridBoard | None = None,
+    config: CalibratorConfig | None = None,
     output_dir: str = ".",
     slow_find_center: bool = False,
-    fov_radius_frac: float | None = None,
 ) -> None:
     """Launch the interactive batch (folder-based) calibration GUI."""
     _require_gui_deps()
@@ -869,13 +870,10 @@ def launch_gui(
         image_dir=image_dir,
         base_name=base_name,
         extension=extension,
-        n_sq_x=n_sq_x,
-        n_sq_y=n_sq_y,
-        spacing_mm=spacing_mm,
-        taylor_order=taylor_order,
+        board=board,
+        config=config,
         output_dir=output_dir,
         slow_find_center=slow_find_center,
-        fov_radius_frac=fov_radius_frac,
     )
     root.mainloop()
 
@@ -901,10 +899,10 @@ def launch_live_gui(
         consumer=consumer,
         subscribe_fn=subscribe_fn,
         initial_topic=initial_topic,
-        n_sq_x=calibrator.board.n_sq_x,
-        n_sq_y=calibrator.board.n_sq_y,
-        spacing_mm=calibrator.board.spacing_mm,
-        taylor_order=calibrator.taylor_order,
+        # The live Calibrator is already built (by live_node.py's main());
+        # this only seeds the (disabled, display-only) board/taylor widgets.
+        board=calibrator.board,
+        config=CalibratorConfig(taylor_order=calibrator.taylor_order),
         output_dir=output_dir,
         slow_find_center=slow_find_center,
     )

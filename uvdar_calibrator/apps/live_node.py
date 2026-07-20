@@ -61,7 +61,7 @@ import sensor_msgs.msg
 
 from .gui import launch_live_gui
 from ..engine.board import LedGridBoard
-from ..engine.calibrator import Calibrator
+from ..engine.calibrator import Calibrator, CalibratorConfig
 
 DEFAULT_RATE_HZ = 2.0
 
@@ -333,8 +333,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     board = LedGridBoard(
         n_sq_x=args.n_sq_x, n_sq_y=args.n_sq_y, spacing_mm=args.spacing_mm
     )
-    calibrator = Calibrator(
-        board,
+    config = CalibratorConfig(
         taylor_order=args.taylor_order,
         preview_dir=str(Path(args.output_dir) / "detected_marker_previews"),
         # A live stream produces an endless supply of detected-but-rejected
@@ -342,6 +341,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         save_previews_for_rejected=False,
         fov_radius_frac=args.fov_radius_frac,
     )
+    calibrator = Calibrator(board, config)
 
     raw_queue: Queue = BufferQueue(maxsize=1)
     preview_queue: Queue = BufferQueue(maxsize=1)
