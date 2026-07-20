@@ -342,6 +342,10 @@ class Calibrator:
         if np.isscalar(RRfin) or np.size(RRfin) == 1:
             raise RuntimeError("Calibration failed while computing extrinsics.")
 
+        # model is owned exclusively by this method from here on: every
+        # field is assigned here, at an explicit point, never mutated
+        # inside a helper -- findcenter/findcenter_fast return
+        # (xc, yc, ss, RRfin) instead of mutating the model they're given.
         model.ss = np.asarray(ss, dtype=float)
         reprojectpoints(model, RRfin, ima_proc, self.Xt, self.Yt, Xp_abs, Yp_abs)
         print("ss =")
@@ -350,13 +354,13 @@ class Calibrator:
         if do_find_center:
             print("\nStep 4: Find center")
             if fast_find_center:
-                new_RRfin = findcenter_fast(
+                found = findcenter_fast(
                     model, self.Xt, self.Yt, Xp_abs, Yp_abs, self.taylor_order, ima_proc
                 )
-                if new_RRfin is not None:
-                    RRfin = new_RRfin
+                if found is not None:
+                    model.xc, model.yc, model.ss, RRfin = found
             else:
-                RRfin = findcenter(
+                model.xc, model.yc, model.ss, RRfin = findcenter(
                     model, self.Xt, self.Yt, Xp_abs, Yp_abs, self.taylor_order, ima_proc
                 )
         else:

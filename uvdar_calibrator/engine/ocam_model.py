@@ -24,7 +24,7 @@ Conventions (load-bearing -- do not "fix"):
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import math
 from pathlib import Path
 import shutil
@@ -818,16 +818,19 @@ def findcenter(
     Yp_abs: np.ndarray,
     taylor_order: int,
     ima_proc: Sequence[int],
-) -> np.ndarray:
+) -> Tuple[float, float, np.ndarray, np.ndarray]:
     """
     Original MATLAB-style exhaustive center search.
 
-    Mutates ``ocam_model`` (xc, yc, ss) and returns the recalibrated RRfin.
+    Does NOT mutate ``ocam_model`` -- returns ``(xc, yc, ss, RRfin)`` for
+    the caller to commit (see findcenter_fast's docstring for why).
     """
     print("\nComputing center coordinates.\n")
 
     pxc = ocam_model.xc
     pyc = ocam_model.yc
+    cur_xc = pxc
+    cur_yc = pyc
 
     width = ocam_model.width
     height = ocam_model.height
@@ -892,17 +895,17 @@ def findcenter(
 
         ind = np.unravel_index(np.argmin(MSEA), MSEA.shape)
 
-        ocam_model.xc = float(xreg[ind])
-        ocam_model.yc = float(yreg[ind])
+        cur_xc = float(xreg[ind])
+        cur_yc = float(yreg[ind])
 
         dx_reg = abs((xregstop - xregstart) / xceil)
         dy_reg = abs((yregstop - yregstart) / yceil)
 
-        xregstart = ocam_model.xc - dx_reg
-        xregstop = ocam_model.xc + dx_reg
+        xregstart = cur_xc - dx_reg
+        xregstop = cur_xc + dx_reg
 
-        yregstart = ocam_model.yc - dy_reg
-        yregstop = ocam_model.yc + dy_reg
+        yregstart = cur_yc - dy_reg
+        yregstop = cur_yc + dy_reg
 
         print(f"{glc}...", end="", flush=True)
 
@@ -913,20 +916,25 @@ def findcenter(
         Yt,
         Xp_abs,
         Yp_abs,
-        ocam_model.xc,
-        ocam_model.yc,
+        cur_xc,
+        cur_yc,
         taylor_order,
         ima_proc,
     )
 
-    ocam_model.ss = np.asarray(ss, dtype=float)
+    ss = np.asarray(ss, dtype=float)
 
-    reprojectpoints(ocam_model, RRfin, ima_proc, Xt, Yt, Xp_abs, Yp_abs)
+    # Diagnostic-only print; see findcenter_fast's docstring for why this
+    # uses a throwaway copy instead of mutating ocam_model.
+    reprojectpoints(
+        replace(ocam_model, xc=cur_xc, yc=cur_yc, ss=ss),
+        RRfin, ima_proc, Xt, Yt, Xp_abs, Yp_abs,
+    )
 
-    print("xc =", ocam_model.xc)
-    print("yc =", ocam_model.yc)
+    print("xc =", cur_xc)
+    print("yc =", cur_yc)
 
-    return RRfin
+    return cur_xc, cur_yc, ss, RRfin
 
 
 def findcenter_fast(
@@ -940,7 +948,7 @@ def findcenter_fast(
     iterations: int = 4,
     grid_size: int = 3,
     start_radius_fraction: float = 0.20,
-) -> Optional[np.ndarray]:
+) -> Optional[Tuple[float, float, np.ndarray, np.ndarray]]:
     """
     Faster center search.
 
@@ -948,9 +956,12 @@ def findcenter_fast(
     recalibrates many times. This fast version searches a smaller grid and
     shrinks the search radius after each pass.
 
-    Mutates ``ocam_model`` (xc, yc, ss) and returns the recalibrated RRfin,
-    or None when the search fails (the caller should keep the previous
-    center/extrinsics in that case).
+    Does NOT mutate ``ocam_model`` -- returns ``(xc, yc, ss, RRfin)`` for
+    the caller to commit, or None when the search fails (the caller should
+    keep the previous center/extrinsics in that case). Committing model
+    state is the caller's (Calibrator.cal_fromcorners') responsibility
+    alone, so there's one place that owns "what is the model's state right
+    now", not a mutation hidden inside this search.
     """
     print("\nComputing center coordinates using FAST search.\n")
 
@@ -1028,17 +1039,21 @@ def findcenter_fast(
         print("Fast center search failed. Keeping previous center.")
         return None
 
-    ocam_model.xc = best_xc
-    ocam_model.yc = best_yc
-    ocam_model.ss = np.asarray(best_ss, dtype=float)
+    best_ss = np.asarray(best_ss, dtype=float)
 
     print("\nFast center search complete.")
-    print("xc =", ocam_model.xc)
-    print("yc =", ocam_model.yc)
+    print("xc =", best_xc)
+    print("yc =", best_yc)
 
-    reprojectpoints(ocam_model, best_RRfin, ima_proc, Xt, Yt, Xp_abs, Yp_abs)
+    # Diagnostic-only print of reprojection error for the just-found best
+    # center; uses a throwaway copy so this function never mutates the
+    # caller's model (see docstring).
+    reprojectpoints(
+        replace(ocam_model, xc=best_xc, yc=best_yc, ss=best_ss),
+        best_RRfin, ima_proc, Xt, Yt, Xp_abs, Yp_abs,
+    )
 
-    return best_RRfin
+    return best_xc, best_yc, best_ss, best_RRfin
 
 
 def recomp_corner_calib(
