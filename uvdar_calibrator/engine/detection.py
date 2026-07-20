@@ -248,6 +248,34 @@ def _order_uv_points_projective(
     return np.asarray(ordered, dtype=float)
 
 
+def _reorder_row_major_to_x_major(
+    points_col_row: np.ndarray,
+    n_cols: int,
+    n_rows: int,
+    transposed: bool = False,
+) -> np.ndarray:
+    """
+    Reorder a flat, gridded array of (col, row) points from OpenCV's
+    row-major layout (index = row * n_cols + col) into this codebase's
+    x-major, y-minor [row, col] order (outer loop over board x, inner loop
+    over board y), matching Xt/Yt generation.
+
+    Used by both the chessboard and circle-grid detectors -- they receive
+    the same shape of OpenCV output and need the identical reindex.
+    ``transposed=True`` handles the circle-grid detector's case where
+    OpenCV found the pattern rotated (n_rows columns x n_cols rows).
+    """
+    pts = []
+
+    for x in range(n_cols):
+        for y in range(n_rows):
+            cv_index = (x * n_rows + y) if transposed else (y * n_cols + x)
+            col, row = points_col_row[cv_index]
+            pts.append([row, col])
+
+    return np.asarray(pts, dtype=float)
+
+
 def _try_chessboard_detection(
     img: np.ndarray,
     expected_cols: int,
@@ -292,14 +320,7 @@ def _try_chessboard_detection(
 
     # OpenCV gives row-major image order. Convert to the x-major order
     # used by Xt/Yt: x outer, y inner.
-    pts = []
-    for x in range(expected_cols):
-        for y in range(expected_rows):
-            cv_index = y * expected_cols + x
-            col, row = corners[cv_index]
-            pts.append([row, col])
-
-    return np.asarray(pts, dtype=float)
+    return _reorder_row_major_to_x_major(corners, expected_cols, expected_rows)
 
 
 def _try_circle_grid_detection(
@@ -350,23 +371,13 @@ def _try_circle_grid_detection(
             # Convert OpenCV row-major output to the same x-major, y-minor
             # order used by Xt/Yt: for x in 0..n_sq_x, for y in 0..n_sq_y.
             # If OpenCV found the transposed layout, transpose back.
-            pts = []
-            if pcols == expected_cols and prows == expected_rows:
-                for x in range(expected_cols):
-                    for y in range(expected_rows):
-                        col, row = centers[y * expected_cols + x]
-                        pts.append([row, col])
-            else:
-                # Transposed grid: OpenCV has expected_rows columns and
-                # expected_cols rows. Use row-major groups directly as x-major
-                # groups, because each group has expected_rows points.
-                for x in range(expected_cols):
-                    for y in range(expected_rows):
-                        col, row = centers[x * expected_rows + y]
-                        pts.append([row, col])
+            transposed = not (pcols == expected_cols and prows == expected_rows)
+            pts = _reorder_row_major_to_x_major(
+                centers, expected_cols, expected_rows, transposed=transposed
+            )
 
             print(f"  UV circle-grid detector OK with pattern {pcols}x{prows}")
-            return np.asarray(pts, dtype=float)
+            return pts
     except Exception as exc:
         print(f"  UV circle-grid detector skipped: {exc}")
 
