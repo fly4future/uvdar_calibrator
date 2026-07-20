@@ -265,6 +265,68 @@ def compute_goodenough(
     return goodenough, list(zip(PARAM_NAMES, min_params, max_params, progress))
 
 
+def compute_goodenough_with_bins(
+    db_params: Sequence[Sequence[float]],
+    metrics: Sequence[dict],
+    param_ranges: Sequence[float] = DEFAULT_PARAM_RANGES,
+    min_db_size: int = DEFAULT_MIN_DB_SIZE,
+) -> Tuple[bool, List[Tuple[str, float, float, float]], dict]:
+    """
+    Judge calibration readiness using both numeric range progress and spatial bins.
+
+    READY requires:
+
+    1. X/Y/Size/Skew range progress all reach 100%.
+    2. Accepted samples cover left, center, and right.
+    3. Accepted samples cover top, middle, and bottom.
+    4. Accepted samples cover all four quadrants: LT, RT, LB, RB.
+
+    This makes the GUI readiness state match the board-position coverage graph
+    much better than range progress alone.
+    """
+    range_good, progress = compute_goodenough(
+        db_params,
+        param_ranges=param_ranges,
+        min_db_size=min_db_size,
+    )
+
+    if not metrics:
+        empty_report = {
+            "metrics": [],
+            "accepted_images": 0,
+            "missing": {
+                "x": ["left", "center", "right"],
+                "y": ["bottom", "middle", "top"],
+                "size": ["close/large", "far/small", "medium"],
+                "tilt": ["front-on", "moderately tilted"],
+                "quadrants": ["LB", "LT", "RB", "RT"],
+            },
+            "sets": {
+                "x": set(),
+                "y": set(),
+                "size": set(),
+                "tilt": set(),
+                "quadrants": set(),
+            },
+        }
+        return False, progress, empty_report
+
+    report = compute_bin_coverage(list(metrics))
+    missing = report["missing"]
+
+    spatial_good = (
+        not missing["x"]
+        and not missing["y"]
+        and not missing["quadrants"]
+    )
+
+    # Size and tilt bins are useful suggestions, but Size and Skew are already
+    # required through the numeric progress bars. Do not double-gate them here.
+    goodenough = range_good and spatial_good
+
+    return goodenough, progress, report
+
+
 def format_progress(
     progress: List[Tuple[str, float, float, float]],
     goodenough: bool,

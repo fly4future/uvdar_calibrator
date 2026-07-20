@@ -465,6 +465,13 @@ class _BaseCalibrationApp:
                 suggestions = ["All coverage bins are represented."]
         else:
             suggestions = ["No accepted samples yet."]
+
+        # The position guide answers "where next", which is more actionable
+        # than the bin report's "what's missing" -- so it goes first.
+        overlay = self._coverage_overlay_guide()
+        if overlay is not None:
+            suggestions.insert(0, overlay["text"])
+
         self._write_text(self.suggestion_box, "\n".join(f"• {s}" for s in suggestions))
 
     def _progress_color(self, p: float) -> str:
@@ -588,6 +595,17 @@ class _BaseCalibrationApp:
                 outline="#1f77b4", fill=self._skew_color(pskew),
             )
 
+        # Same target the on-image overlay draws, in graph space: it shows
+        # where the next capture should land relative to what's already here.
+        guide = self._coverage_overlay_guide()
+        if guide is not None:
+            gx = x0 + guide["x"] * (x1 - x0)
+            gy = y0 + guide["y"] * (y1 - y0)
+            c.create_oval(gx - 10, gy - 10, gx + 10, gy + 10, outline="#00a6a6", width=3)
+            c.create_text(
+                gx, gy - 18, text="next", fill="#008080", font=("Segoe UI", 7, "bold"),
+            )
+
         c.create_text(
             x1, 6, text=f"{len(cal.db)} accepted",
             anchor="ne", fill="#333", font=("Segoe UI", 8),
@@ -624,7 +642,143 @@ class _BaseCalibrationApp:
     def _on_forward_view_toggle(self):
         self._show_current_sample()
 
-    def _render_frame(self, image, corners, caption):
+    def _coverage_overlay_guide(self):
+        """
+        Where to put the board next, as normalized image coordinates.
+
+        Reads the per-axis progress from compute_goodenough_with_bins and
+        turns the least-covered axes into one target position plus a short
+        instruction. Returns None when nothing needs improving, which is how
+        callers know to draw no guidance at all.
+        """
+        cal = self.calibrator
+        if cal is None:
+            return None
+
+        metrics = []
+        for sample in cal.db:
+            m = coverage.sample_metric(
+                sample.corners, cal.board, cal.image_size,
+                label=Path(sample.image_path).name,
+                valid_region=cal.valid_region_px(),
+            )
+            if m is not None:
+                metrics.append(m)
+
+        _goodenough, progress, _report = coverage.compute_goodenough_with_bins(
+            cal.db_params(), metrics, cal.param_ranges, cal.min_db_size,
+        )
+
+        if not progress:
+            return {
+                "x": 0.5,
+                "y": 0.5,
+                "size": 0.22,
+                "text": "Place the LED grid near the center of the image.",
+            }
+
+        progress_map = {}
+        for name, lo, hi, p in progress:
+            progress_map[str(name).strip().lower()] = (float(lo), float(hi), float(p))
+
+        x = 0.5
+        y = 0.5
+        size = 0.22
+        instructions = []
+
+        x_info = progress_map.get("x")
+        if x_info is not None:
+            lo, hi, p = x_info
+            if p < 1.0:
+                # Push toward whichever side is less explored: if the
+                # accepted range hugs one half, aim at the other.
+                if hi < 0.55 or (lo <= 0.45 and lo <= 1.0 - hi):
+                    x = 0.82
+                    instructions.append("move right")
+                else:
+                    x = 0.18
+                    instructions.append("move left")
+
+        y_info = progress_map.get("y")
+        if y_info is not None:
+            lo, hi, p = y_info
+            if p < 1.0:
+                if hi < 0.55 or (lo <= 0.45 and lo <= 1.0 - hi):
+                    y = 0.82
+                    instructions.append("move lower")
+                else:
+                    y = 0.18
+                    instructions.append("move higher")
+
+        size_info = progress_map.get("size")
+        if size_info is not None:
+            lo, hi, p = size_info
+            if p < 1.0:
+                if lo > 0.12 and hi >= 0.22:
+                    size = 0.10
+                    instructions.append("move farther / make grid smaller")
+                else:
+                    size = 0.34
+                    instructions.append("move closer / make grid larger")
+            elif cal.db:
+                size = float(np.median([s.params[2] for s in cal.db]))
+
+        skew_info = progress_map.get("skew")
+        if skew_info is not None and skew_info[2] < 1.0:
+            instructions.append("tilt the board")
+
+        if not instructions:
+            return None
+
+        return {
+            "x": max(0.05, min(0.95, x)),
+            "y": max(0.05, min(0.95, y)),
+            "size": max(0.08, min(0.45, size)),
+            "text": "Move LED grid here: " + ", ".join(instructions),
+        }
+
+    def _draw_position_guide_on_image(self, preview):
+        """Overlay the "put the grid here" target box on a BGR preview."""
+        guide = self._coverage_overlay_guide()
+        if guide is None:
+            return preview
+
+        h, w = preview.shape[:2]
+        cx = int(round(guide["x"] * w))
+        cy = int(round(guide["y"] * h))
+
+        box = int(round(guide["size"] * min(w, h) * 2.2))
+        box = max(60, min(box, int(0.85 * min(w, h))))
+
+        x0 = max(0, cx - box // 2)
+        y0 = max(0, cy - box // 2)
+        x1 = min(w - 1, cx + box // 2)
+        y1 = min(h - 1, cy + box // 2)
+
+        color = (255, 255, 0)
+
+        overlay = preview.copy()
+        cv2.rectangle(overlay, (x0, y0), (x1, y1), color, 3)
+        cv2.line(overlay, (cx - 18, cy), (cx + 18, cy), color, 2)
+        cv2.line(overlay, (cx, cy - 18), (cx, cy + 18), color, 2)
+        preview = cv2.addWeighted(overlay, 0.75, preview, 0.25, 0)
+
+        cv2.putText(
+            preview, "PUT LED GRID HERE", (max(5, x0), max(22, y0 - 10)),
+            cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2, cv2.LINE_AA,
+        )
+
+        short_hint = guide["text"].replace("Move LED grid here: ", "")
+        if len(short_hint) > 46:
+            short_hint = short_hint[:43] + "..."
+        cv2.putText(
+            preview, short_hint, (max(5, x0), min(h - 12, y1 + 24)),
+            cv2.FONT_HERSHEY_SIMPLEX, 0.48, color, 1, cv2.LINE_AA,
+        )
+
+        return preview
+
+    def _render_frame(self, image, corners, caption, show_guidance: bool = False):
         """Draw one grayscale frame (+ detected points, if any) on the canvas."""
         img = image
         if img.ndim == 2:
@@ -639,6 +793,12 @@ class _BaseCalibrationApp:
                 cv2.circle(preview, (int(round(col)), int(round(row))), 5, (0, 0, 255), 1)
                 cv2.putText(preview, str(idx), (int(round(col)) + 5, int(round(row)) - 5),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.35, (0, 255, 0), 1, cv2.LINE_AA)
+
+        # Guidance is drawn in raw sensor coordinates, so it must go on
+        # before the display rescale. Skipped under the forward view, whose
+        # remap would put the target box somewhere the board isn't.
+        if show_guidance and not self.forward_view_var.get():
+            preview = self._draw_position_guide_on_image(preview)
 
         cw = max(50, self.image_canvas.winfo_width())
         ch = max(50, self.image_canvas.winfo_height())
@@ -1002,7 +1162,9 @@ class LiveCalibrationApp(_BaseCalibrationApp):
 
         if self.consumer.capturing.is_set() and self._latest_preview is not None:
             img, pts = self._apply_forward_view(self._latest_preview, self._latest_corners)
-            self._render_frame(img, pts, f"Live preview: {self._latest_outcome}")
+            self._render_frame(
+                img, pts, f"Live preview: {self._latest_outcome}", show_guidance=True,
+            )
             self._set_status(
                 f"Live capture on '{self._subscribed_topic}': "
                 f"{len(self.calibrator.db)} accepted, {self.n_rejected} rejected, "
