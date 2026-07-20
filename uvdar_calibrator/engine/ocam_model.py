@@ -16,6 +16,10 @@ Conventions (load-bearing -- do not "fix"):
   ``Yp_abs`` = col) -- the reverse of OpenCV's usual ``[x, y]``.
 - Board points ``Xt``/``Yt`` are generated x-major, y-minor (outer loop
   over x, inner loop over y).
+- No module-level matplotlib import: ``plot_RR``'s optional diagnostic
+  plot (dead in this codebase -- the sole caller always passes
+  ``figure_number=0``) imports matplotlib lazily so this module has no
+  hard plotting dependency, matching "pure math" above.
 """
 
 from __future__ import annotations
@@ -26,7 +30,6 @@ from pathlib import Path
 import shutil
 from typing import Optional, Sequence, Tuple
 
-import matplotlib.pyplot as plt
 import numpy as np
 
 try:
@@ -297,6 +300,15 @@ def plot_RR(
     Ypt: np.ndarray,
     figure_number: int = 0,
 ) -> int:
+    """
+    Select the correct candidate solution among RR[:, :, i] and return its
+    index. Despite the name, this is solver math (a least-squares solve
+    per candidate, picking the one with a consistent sign), not a plotting
+    function -- plotting is an optional diagnostic side effect, only run
+    when figure_number > 0 (matplotlib is imported lazily below so this
+    module has no hard plotting dependency for the always-used, math-only
+    path; the sole caller in this codebase always passes figure_number=0).
+    """
     selected = 0
 
     for i in range(RR.shape[2]):
@@ -335,6 +347,8 @@ def plot_RR(
         ss = s[:3].ravel()
 
         if figure_number > 0:
+            import matplotlib.pyplot as plt
+
             x = np.arange(0, 621)
             plt.figure(figure_number)
             plt.subplot(1, RR.shape[2], i + 1)
