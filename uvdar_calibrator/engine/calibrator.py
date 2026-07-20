@@ -89,6 +89,15 @@ class CalibratorConfig:
     # means "use the full rectangular frame" -- see coverage.get_parameters'
     # valid_region for why this matters.
     fov_radius_frac: Optional[float] = None
+    # Hard cap on len(db): once reached, further frames are rejected rather
+    # than appended, so accepted samples' full-resolution images (retained
+    # for diagnostic plots and sample browsing) can't grow unbounded over a
+    # long-running session. None (default) means no cap -- fine for batch
+    # mode, where db size is already bounded by the folder's file count;
+    # live_node.py sets a real default since a live session has no such
+    # natural bound. Unrelated to min_db_size, which is a *readiness*
+    # threshold, not a retention limit.
+    max_accepted_samples: Optional[int] = None
 
 
 class Calibrator:
@@ -109,6 +118,9 @@ class Calibrator:
         self.min_db_size = int(config.min_db_size)
         self.fov_radius_frac = (
             float(config.fov_radius_frac) if config.fov_radius_frac is not None else None
+        )
+        self.max_accepted_samples = (
+            int(config.max_accepted_samples) if config.max_accepted_samples is not None else None
         )
 
         self.db: List[Sample] = []
@@ -201,6 +213,19 @@ class Calibrator:
                     f"{name}: rejected -- too similar to sample {nearest} "
                     f"({Path(self.db[nearest - 1].image_path).name}, "
                     f"distance {min(distances):.3f} <= {self.sample_threshold})"
+                ),
+            )
+
+        if self.max_accepted_samples is not None and len(self.db) >= self.max_accepted_samples:
+            return self._result(
+                image_path,
+                detected=True,
+                accepted=False,
+                params=params,
+                corners=corners,
+                reason=(
+                    f"{name}: rejected -- accepted-sample cap reached "
+                    f"({self.max_accepted_samples}); not retaining more images"
                 ),
             )
 

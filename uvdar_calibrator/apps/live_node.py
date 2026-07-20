@@ -64,6 +64,12 @@ from ..engine.board import LedGridBoard
 from ..engine.calibrator import Calibrator, CalibratorConfig
 
 DEFAULT_RATE_HZ = 2.0
+# A live session has no natural stopping point the way a folder of photos
+# does, so without a cap, accepted samples' full-resolution images would
+# accumulate unbounded over a long-running capture. This is generous
+# headroom over what a real calibration session needs (a few dozen at
+# most) while still bounding memory growth.
+DEFAULT_MAX_ACCEPTED_SAMPLES = 300
 
 
 class BufferQueue(Queue):
@@ -319,6 +325,14 @@ def _build_arg_parser() -> argparse.ArgumentParser:
                        "before detection. Reduces detection cost on high-resolution "
                        "cameras. Default: None (no downscaling)."
                    ))
+    p.add_argument("--max_accepted_samples", type=int, default=DEFAULT_MAX_ACCEPTED_SAMPLES,
+                   help=(
+                       "Hard cap on accepted samples. A live session has no natural "
+                       "stopping point the way a folder of photos does, so accepted "
+                       "samples' full-resolution images (kept for diagnostic plots "
+                       "and sample browsing) would otherwise grow unbounded over a "
+                       f"long-running capture. Default: {DEFAULT_MAX_ACCEPTED_SAMPLES}."
+                   ))
     return p
 
 
@@ -340,6 +354,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         # near-duplicates; only write preview files for accepted samples.
         save_previews_for_rejected=False,
         fov_radius_frac=args.fov_radius_frac,
+        max_accepted_samples=args.max_accepted_samples,
     )
     calibrator = Calibrator(board, config)
 
