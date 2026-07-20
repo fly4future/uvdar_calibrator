@@ -180,8 +180,10 @@ class _BaseCalibrationApp:
 
         title = ttk.Label(right, text="Calibration Progress", font=("Segoe UI", 14, "bold"))
         title.pack(anchor="w")
-        self.status_label = ttk.Label(right, text="Status: no images analyzed", wraplength=320)
-        self.status_label.pack(anchor="w", pady=(8, 8))
+        self.status_label = ttk.Label(
+            right, text="Status: no images analyzed", wraplength=320, justify="center"
+        )
+        self.status_label.pack(anchor="center", pady=(8, 8))
 
         # Four ROS-style range bars: X, Y, Size, Skew.
         self.bar_canvas = tk.Canvas(
@@ -193,12 +195,12 @@ class _BaseCalibrationApp:
 
         ttk.Label(
             right, text="Board position coverage:", font=("Segoe UI", 10, "bold")
-        ).pack(anchor="w")
+        ).pack(anchor="center")
         self.coverage_canvas = tk.Canvas(
             right, width=320, height=180, bg="white",
             highlightthickness=1, highlightbackground="#ccc",
         )
-        self.coverage_canvas.pack(anchor="w", pady=(4, 10))
+        self.coverage_canvas.pack(anchor="center", pady=(4, 10))
         self._draw_coverage_graph()
 
         ttk.Label(right, text="Sample log:", font=("Segoe UI", 10, "bold")).pack(anchor="w")
@@ -369,7 +371,8 @@ class _BaseCalibrationApp:
 
         width, height = 320, 180
         margin = 14
-        x0, y0 = margin, margin
+        margin_left = 24  # wider than `margin` so the vertical axis label fits
+        x0, y0 = margin_left, margin
         x1, y1 = width - margin, height - margin
 
         c.create_rectangle(x0, y0, x1, y1, outline="#999", fill="#fafafa")
@@ -380,7 +383,12 @@ class _BaseCalibrationApp:
             c.create_line(x0, y, x1, y, fill="#ddd", dash=(3, 3))
 
         c.create_text((x0 + x1) / 2, y1 + 8, text="left → right (X)", font=("Segoe UI", 7))
-        c.create_text(x0 - 8, (y0 + y1) / 2, text="top\n↓\nbtm", font=("Segoe UI", 6), justify="center")
+        # anchor="w" at a fixed small x keeps this inside the canvas -- centering
+        # it under x0 (as before) could push its bbox to a negative x and clip it.
+        c.create_text(
+            4, (y0 + y1) / 2, text="top\n↓\nbtm", font=("Segoe UI", 6),
+            justify="center", anchor="w",
+        )
 
         # Skew color legend, top-left.
         c.create_oval(x0 + 2, 2, x0 + 10, 10, outline="", fill=self._skew_color(0.0))
