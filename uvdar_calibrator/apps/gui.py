@@ -682,11 +682,14 @@ class LiveCalibrationApp(_BaseCalibrationApp):
     Live-topic app driven by the ROS 2 subscriber in ``live_node``.
 
     Replaces the folder controls with an image-topic field and a
-    Start/Stop capture toggle; frames are processed by a background
-    consumer thread and their ``FrameResult``s drained here via
-    ``root.after`` polling. The canvas follows the most recently
-    processed live frame while capturing; Previous/Next still browse the
-    accepted samples.
+    Start/Stop capture toggle. Two queues are drained independently:
+    ``preview_queue`` (unthrottled -- always the freshest camera frame, for
+    a responsive live view) and ``result_queue`` (throttled by
+    ``--rate_hz`` -- processed ``FrameResult``s, for the sample
+    log/accept-reject/progress panel). They used to share one throttled
+    queue, so the live view could only update as fast as detection
+    completed; decoupling them means the camera view stays live regardless
+    of detection cost. Previous/Next still browse the accepted samples.
     """
 
     POLL_MS = 50
@@ -696,18 +699,23 @@ class LiveCalibrationApp(_BaseCalibrationApp):
         root,
         calibrator: Calibrator,
         result_queue,
+        preview_queue,
         consumer,
         subscribe_fn,
         initial_topic: str = "image",
         **kwargs,
     ):
         self.result_queue = result_queue
+        self.preview_queue = preview_queue
         self.consumer = consumer
         self.subscribe_fn = subscribe_fn
         self.topic = tk.StringVar(value=initial_topic)
         self._subscribed_topic = initial_topic
         self.n_rejected = 0
         self.n_failed = 0
+        self._latest_preview = None
+        self._latest_corners = None
+        self._latest_outcome = "waiting for first processed frame"
         super().__init__(root, **kwargs)
 
         self.calibrator = calibrator
@@ -752,39 +760,55 @@ class LiveCalibrationApp(_BaseCalibrationApp):
         self._refresh_capture_button()
 
     def _poll_queue(self):
-        latest = None
+        """
+        Drain both queues independently every tick.
+
+        result_queue (throttled by --rate_hz) drives accept/reject
+        bookkeeping, the sample log, and the progress panel -- unchanged
+        from before. preview_queue (unthrottled) drives what's rendered on
+        the canvas, so the live view keeps updating every tick even when no
+        new processed result has arrived yet.
+        """
+        got_result = False
         while True:
             try:
-                result, image = self.result_queue.get_nowait()
+                result, _image = self.result_queue.get_nowait()
             except queue.Empty:
                 break
-            latest = (result, image)
-            if result.detected and not result.accepted:
+            got_result = True
+            self._latest_corners = result.corners
+            if result.accepted:
+                self._latest_outcome = f"ACCEPTED as sample {len(self.calibrator.db)}"
+                # Keep browsing anchored to the newest accepted sample.
+                self.current_sample_index = len(self.calibrator.db) - 1
+            elif result.detected:
+                self._latest_outcome = "detected but rejected (too similar)"
                 self.n_rejected += 1
-            elif not result.detected:
+            else:
+                self._latest_outcome = "no markers detected"
                 self.n_failed += 1
             self._append_log(result.reason)
 
-        if latest is not None:
-            result, image = latest
+        if got_result:
             self._update_progress_panel()
-            if self.consumer.capturing.is_set():
-                if result.accepted:
-                    outcome = f"ACCEPTED as sample {len(self.calibrator.db)}"
-                elif result.detected:
-                    outcome = "rejected (too similar)"
-                else:
-                    outcome = "no markers detected"
-                img, pts = self._apply_forward_view(image, result.corners)
-                self._render_frame(img, pts, f"Live frame: {outcome}")
-                self._set_status(
-                    f"Live capture on '{self._subscribed_topic}': "
-                    f"{len(self.calibrator.db)} accepted, {self.n_rejected} rejected, "
-                    f"{self.n_failed} without detection."
-                )
-                # Keep browsing anchored to the newest accepted sample.
-                if result.accepted:
-                    self.current_sample_index = len(self.calibrator.db) - 1
+
+        latest_preview = None
+        while True:
+            try:
+                latest_preview = self.preview_queue.get_nowait()
+            except queue.Empty:
+                break
+        if latest_preview is not None:
+            self._latest_preview = latest_preview
+
+        if self.consumer.capturing.is_set() and self._latest_preview is not None:
+            img, pts = self._apply_forward_view(self._latest_preview, self._latest_corners)
+            self._render_frame(img, pts, f"Live preview: {self._latest_outcome}")
+            self._set_status(
+                f"Live capture on '{self._subscribed_topic}': "
+                f"{len(self.calibrator.db)} accepted, {self.n_rejected} rejected, "
+                f"{self.n_failed} without detection."
+            )
 
         self.root.after(self.POLL_MS, self._poll_queue)
 
@@ -831,6 +855,7 @@ def launch_gui(
 def launch_live_gui(
     calibrator: Calibrator,
     result_queue,
+    preview_queue,
     consumer,
     subscribe_fn,
     initial_topic: str = "image",
@@ -844,6 +869,7 @@ def launch_live_gui(
         root,
         calibrator=calibrator,
         result_queue=result_queue,
+        preview_queue=preview_queue,
         consumer=consumer,
         subscribe_fn=subscribe_fn,
         initial_topic=initial_topic,

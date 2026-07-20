@@ -7,15 +7,29 @@ adapted to hand work off to the Tkinter GUI instead of a cv2.imshow loop:
 
 - ``CalibrationSubscriberNode`` subscribes to a ``sensor_msgs/Image``
   topic (default name ``image``; remap with ``image:=/camera/image_raw``)
-  and pushes grayscale frames onto a :class:`BufferQueue`.
-- ``FrameConsumerThread`` pulls frames off that queue -- throttled to at
+  and pushes each grayscale frame onto *two* independent
+  :class:`BufferQueue`\\ s: ``preview_queue`` (always the freshest frame,
+  for the live camera view) and ``raw_queue`` (feeds detection). These are
+  intentionally separate -- see below.
+- ``FrameConsumerThread`` pulls frames off ``raw_queue`` -- throttled to at
   most ``rate_hz`` calls per second, since consecutive live frames are
   near-duplicates that would pay full detection cost only to be rejected
   by ``is_good_sample`` -- and feeds them to
   :meth:`~uvdar_calibrator.engine.calibrator.Calibrator.handle_frame`, pushing
-  each result onto a second queue for the Tkinter app to drain.
+  each result onto ``result_queue`` for the Tkinter app to drain.
 - ``rclpy.spin`` runs on a background :class:`SpinThread`; Tkinter owns
   the main thread.
+
+The camera preview and detection used to share one throttled queue, so the
+live view could only update as fast as ``handle_frame`` (chessboard/circle
+grid/UV-dot detection) completed, and raising ``--rate_hz`` had no visible
+effect once detection cost -- not the throttle -- was the real bottleneck.
+``preview_queue`` decouples "what the camera sees right now" from "how
+often we attempt to add a calibration sample", so the live view is
+responsive regardless of detection cost or ``--rate_hz``. ``--max_dimension``
+additionally shrinks frames (uniformly, preserving aspect ratio) before
+detection to reduce that cost directly, since a non-uniform resize would
+distort the calibration geometry.
 
 Run it the same way as upstream's cameracalibrator::
 
@@ -152,10 +166,19 @@ class FrameConsumerThread(threading.Thread):
 class CalibrationSubscriberNode(Node):
     """Subscribe to a sensor_msgs/Image topic and queue grayscale frames."""
 
-    def __init__(self, raw_queue: Queue, image_topic: str = "image", queue_size: int = 10):
+    def __init__(
+        self,
+        raw_queue: Queue,
+        preview_queue: Queue,
+        image_topic: str = "image",
+        queue_size: int = 10,
+        max_dimension: Optional[int] = None,
+    ):
         super().__init__("uvdar_cameracalibrator")
         self.raw_queue = raw_queue
+        self.preview_queue = preview_queue
         self.queue_size = int(queue_size)
+        self.max_dimension = int(max_dimension) if max_dimension else None
         self.bridge = cv_bridge.CvBridge()
         self._sub = None
         self.subscribe(image_topic)
@@ -180,6 +203,10 @@ class CalibrationSubscriberNode(Node):
         except Exception as exc:
             self.get_logger().warning(f"Could not convert image message: {exc}")
             return
+        # preview_queue is unthrottled so the live view stays responsive
+        # regardless of detection cost or --rate_hz; raw_queue feeds the
+        # throttled FrameConsumerThread as before.
+        self.preview_queue.put(gray)
         self.raw_queue.put(gray)
 
     def mkgray(self, msg: sensor_msgs.msg.Image) -> np.ndarray:
@@ -188,24 +215,36 @@ class CalibrationSubscriberNode(Node):
 
         Ported from upstream camera_calibration's ``Calibrator.mkgray`` --
         handles 16-bit and floating-point encodings robustly, not just mono8.
+        If ``max_dimension`` is set, uniformly downscales (same factor on
+        both axes, so aspect ratio -- and therefore calibration geometry --
+        is preserved) so the longer side doesn't exceed it, reducing
+        detection cost on high-resolution cameras.
         """
         # as cv_bridge automatically scales, we need to remove that behavior
         if self.bridge.encoding_to_dtype_with_channels(msg.encoding)[0] in ["uint16", "int16"]:
             mono16 = self.bridge.imgmsg_to_cv2(msg, "16UC1")
-            mono8 = np.array(np.clip(mono16, 0, 255), dtype=np.uint8)
-            return mono8
+            gray = np.array(np.clip(mono16, 0, 255), dtype=np.uint8)
         elif "FC1" in msg.encoding:
             # floating point image handling
             img = self.bridge.imgmsg_to_cv2(msg, "passthrough")
             _, max_val, _, _ = cv2.minMaxLoc(img)
             if max_val > 0:
                 scale = 255.0 / max_val
-                mono_img = (img * scale).astype(np.uint8)
+                gray = (img * scale).astype(np.uint8)
             else:
-                mono_img = img.astype(np.uint8)
-            return mono_img
+                gray = img.astype(np.uint8)
         else:
-            return self.bridge.imgmsg_to_cv2(msg, "mono8")
+            gray = self.bridge.imgmsg_to_cv2(msg, "mono8")
+
+        if self.max_dimension is not None:
+            height, width = gray.shape[:2]
+            longest = max(height, width)
+            if longest > self.max_dimension:
+                scale = self.max_dimension / float(longest)
+                new_size = (max(1, round(width * scale)), max(1, round(height * scale)))
+                gray = cv2.resize(gray, new_size, interpolation=cv2.INTER_AREA)
+
+        return gray
 
 
 def _split_ros_args(argv: Sequence[str]) -> Tuple[List[str], Optional[List[str]]]:
@@ -273,6 +312,13 @@ def _build_arg_parser() -> argparse.ArgumentParser:
                        "Default: None, meaning the full rectangular frame is assumed "
                        "usable."
                    ))
+    p.add_argument("--max_dimension", type=int, default=None,
+                   help=(
+                       "Downscale incoming frames (uniformly, preserving aspect "
+                       "ratio) so the longer side doesn't exceed this many pixels, "
+                       "before detection. Reduces detection cost on high-resolution "
+                       "cameras. Default: None (no downscaling)."
+                   ))
     return p
 
 
@@ -298,10 +344,16 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     )
 
     raw_queue: Queue = BufferQueue(maxsize=1)
+    preview_queue: Queue = BufferQueue(maxsize=1)
     result_queue: Queue = Queue()
 
     rclpy.init(args=ros_args)
-    node = CalibrationSubscriberNode(raw_queue, image_topic="image")
+    node = CalibrationSubscriberNode(
+        raw_queue,
+        preview_queue,
+        image_topic="image",
+        max_dimension=args.max_dimension,
+    )
 
     spin_thread = SpinThread(node)
     spin_thread.start()
@@ -314,6 +366,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         launch_live_gui(
             calibrator,
             result_queue,
+            preview_queue,
             consumer,
             subscribe_fn=node.subscribe,
             initial_topic=node.resolved_topic,
