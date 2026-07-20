@@ -191,6 +191,16 @@ class _BaseCalibrationApp:
         self.bar_canvas.pack(anchor="w", pady=(0, 10))
         self._draw_bars([])
 
+        ttk.Label(
+            right, text="Board position coverage:", font=("Segoe UI", 10, "bold")
+        ).pack(anchor="w")
+        self.coverage_canvas = tk.Canvas(
+            right, width=320, height=180, bg="white",
+            highlightthickness=1, highlightbackground="#ccc",
+        )
+        self.coverage_canvas.pack(anchor="w", pady=(4, 10))
+        self._draw_coverage_graph()
+
         ttk.Label(right, text="Sample log:", font=("Segoe UI", 10, "bold")).pack(anchor="w")
         self.log_box = tk.Text(right, height=10, width=44, wrap="word")
         self.log_box.pack(anchor="w", fill=tk.BOTH, expand=True, pady=(4, 10))
@@ -256,6 +266,7 @@ class _BaseCalibrationApp:
             cal.db_params(), cal.param_ranges, cal.min_db_size
         )
         self._draw_bars(progress)
+        self._draw_coverage_graph()
 
         n = len(cal.db)
         if goodenough:
@@ -331,6 +342,59 @@ class _BaseCalibrationApp:
                 )
             c.create_text(x1 + 10, y, text=f"{100.0 * p:.0f}%", anchor="w", font=("Segoe UI", 9))
             y += 32
+
+    def _draw_coverage_graph(self):
+        """
+        Scatter plot of accepted samples' board position (x, y) in the
+        image, marker size ~ apparent board size -- shows at a glance where
+        the board has already been captured, complementing the range bars.
+        Reuses the params already computed by coverage.get_parameters on
+        each accepted Sample, no extra computation needed.
+        """
+        c = self.coverage_canvas
+        c.delete("all")
+
+        width, height = 320, 180
+        margin = 14
+        x0, y0 = margin, margin
+        x1, y1 = width - margin, height - margin
+
+        c.create_rectangle(x0, y0, x1, y1, outline="#999", fill="#fafafa")
+        for frac in (1 / 3, 2 / 3):
+            x = x0 + frac * (x1 - x0)
+            y = y0 + frac * (y1 - y0)
+            c.create_line(x, y0, x, y1, fill="#ddd", dash=(3, 3))
+            c.create_line(x0, y, x1, y, fill="#ddd", dash=(3, 3))
+
+        c.create_text((x0 + x1) / 2, y1 + 8, text="left → right (X)", font=("Segoe UI", 7))
+        c.create_text(x0 - 8, (y0 + y1) / 2, text="top\n↓\nbtm", font=("Segoe UI", 6), justify="center")
+
+        cal = self.calibrator
+        if cal is None or not cal.db:
+            c.create_text(
+                (x0 + x1) / 2, (y0 + y1) / 2,
+                text="No accepted samples yet", fill="#777", font=("Segoe UI", 9),
+            )
+            return
+
+        for sample in cal.db:
+            px = max(0.0, min(1.0, float(sample.params[0])))
+            py = max(0.0, min(1.0, float(sample.params[1])))
+            psize = max(0.0, float(sample.params[2]))
+
+            x = x0 + px * (x1 - x0)
+            y = y0 + py * (y1 - y0)
+            radius = max(3, min(11, 3 + 18 * psize))
+
+            c.create_oval(
+                x - radius, y - radius, x + radius, y + radius,
+                outline="#1f77b4", fill="#9ecae1",
+            )
+
+        c.create_text(
+            x1, 6, text=f"{len(cal.db)} accepted",
+            anchor="ne", fill="#333", font=("Segoe UI", 8),
+        )
 
     # ------------------------------------------------------------------
     # Frame rendering / sample browsing
