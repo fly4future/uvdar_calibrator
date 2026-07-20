@@ -28,17 +28,57 @@ import numpy as np
 
 from .board import LedGridBoard
 
-# NOTE: ROS camera_calibration defaults, carried over unchanged. They were
-# tuned for a hand-held checkerboard filling much of a pinhole camera's
-# frame; the UV LED grid here is smaller in frame and captured from farther
-# away, so these likely need retuning later (do not change casually --
-# retune against real capture sets and observe acceptance behavior).
-DEFAULT_SAMPLE_THRESHOLD = 0.2               # is_good_sample min L1 param distance
-DEFAULT_PARAM_RANGES = (0.7, 0.7, 0.4, 0.5)  # compute_goodenough targets (X, Y, Size, Skew)
-DEFAULT_MIN_DB_SIZE = 40                     # db size forcing goodenough regardless of ranges
+# UV-DAR-tuned sample selection defaults.
+#
+# The original ROS camera_calibration defaults were designed for a printed
+# checkerboard that can fill a large part of a normal pinhole camera image.
+# The UV LED grid is usually smaller in the frame and often captured farther
+# from the camera, so the original ROS ranges can make X and Size coverage
+# difficult to complete.
+#
+# These values make 100% readiness more achievable while still requiring
+# useful variation in board position, apparent size, and tilt.
+# DEFAULT_SAMPLE_THRESHOLD = 0.12
+# DEFAULT_PARAM_RANGES = (0.45, 0.45, 0.25, 0.35)
+# DEFAULT_MIN_DB_SIZE = 25
+
+# PARAM_NAMES = ("X", "Y", "Size", "Skew")
+
+# UV-DAR-tuned sample selection defaults.
+#
+# These values are stricter than the first live-mode tuning.
+# The goal is that 100% coverage should mean the LED grid has moved
+# substantially across the image, not just around the center.
+#
+# X/Y require broad spatial movement.
+# Size requires meaningful near/far variation.
+# Skew requires useful tilt variation.
+#
+# DEFAULT_MIN_DB_SIZE is intentionally set very high so that the program
+# cannot become "ready" only because many near-center samples were collected.
+# Readiness should come from actual X/Y/Size/Skew coverage.
+# DEFAULT_SAMPLE_THRESHOLD = 0.12
+# DEFAULT_PARAM_RANGES = (0.70, 0.70, 0.30, 0.35)
+# DEFAULT_MIN_DB_SIZE = 9999
+
+# PARAM_NAMES = ("X", "Y", "Size", "Skew")
+
+# UV-DAR-tuned sample selection defaults.
+#
+# These values require real X/Y/Size/Skew variation, but are not so strict that
+# calibration requires hundreds of accepted images.
+#
+# X/Y require meaningful movement across the image.
+# Size requires near/far apparent-size variation.
+# Skew requires useful tilt variation.
+#
+# DEFAULT_MIN_DB_SIZE is intentionally high so the program cannot become
+# "ready" only because many near-center samples were collected.
+DEFAULT_SAMPLE_THRESHOLD = 0.10
+DEFAULT_PARAM_RANGES = (0.55, 0.55, 0.25, 0.30)
+DEFAULT_MIN_DB_SIZE = 9999
 
 PARAM_NAMES = ("X", "Y", "Size", "Skew")
-
 
 # -----------------------------------------------------------------------------
 # ROS-style sample parameters
@@ -160,7 +200,6 @@ def is_good_sample(
     d = min(param_distance(params, p) for p in db_params)
     return d > threshold
 
-
 def compute_goodenough(
     db_params: Sequence[Sequence[float]],
     param_ranges: Sequence[float] = DEFAULT_PARAM_RANGES,
@@ -169,11 +208,17 @@ def compute_goodenough(
     """
     Judge readiness from the min/max range covered by accepted samples.
 
-    Returns ``(goodenough, [(name, lo, hi, progress), ...])`` where progress
-    per axis is ``min((hi - lo) / target_range, 1.0)``. "Good enough" means
-    progress is 1.0 on every axis, or the database has grown large
-    regardless (``>= min_db_size`` samples). Returns ``(False, [])`` for an
-    empty database.
+    Returns:
+        goodenough:
+            True only when X/Y/Size/Skew all reach their target ranges.
+
+        progress:
+            List of (name, lo, hi, progress), where progress is between 0 and 1.
+
+    Important:
+        min_db_size is kept for API compatibility, but it no longer forces
+        readiness. Readiness should come from actual coverage, not just the
+        number of accepted samples.
     """
     if not db_params:
         return False, []
@@ -181,11 +226,14 @@ def compute_goodenough(
     all_params = [list(p) for p in db_params]
     min_params = all_params[0]
     max_params = all_params[0]
+
     for params in all_params[1:]:
         min_params = [min(a, b) for (a, b) in zip(min_params, params)]
         max_params = [max(a, b) for (a, b) in zip(max_params, params)]
 
-    # Don't reward small size or skew
+    # For Size and Skew, progress should measure how much useful size/tilt
+    # variation was achieved, not whether the minimum happened to be large.
+    # So Size and Skew start from 0.0.
     min_params = [min_params[0], min_params[1], 0.0, 0.0]
 
     progress = [
@@ -193,10 +241,70 @@ def compute_goodenough(
         for (lo, hi, r) in zip(min_params, max_params, param_ranges)
     ]
 
-    goodenough = (len(all_params) >= min_db_size) or all(p == 1.0 for p in progress)
+    goodenough = all(p >= 1.0 for p in progress)
 
     return goodenough, list(zip(PARAM_NAMES, min_params, max_params, progress))
 
+def compute_goodenough_with_bins(
+    db_params: Sequence[Sequence[float]],
+    metrics: Sequence[dict],
+    param_ranges: Sequence[float] = DEFAULT_PARAM_RANGES,
+    min_db_size: int = DEFAULT_MIN_DB_SIZE,
+) -> Tuple[bool, List[Tuple[str, float, float, float]], dict]:
+    """
+    Judge calibration readiness using both numeric range progress and spatial bins.
+
+    READY requires:
+
+    1. X/Y/Size/Skew range progress all reach 100%.
+    2. Accepted samples cover left, center, and right.
+    3. Accepted samples cover top, middle, and bottom.
+    4. Accepted samples cover all four quadrants: LT, RT, LB, RB.
+
+    This makes the GUI readiness state match the board-position coverage graph
+    much better than range progress alone.
+    """
+    range_good, progress = compute_goodenough(
+        db_params,
+        param_ranges=param_ranges,
+        min_db_size=min_db_size,
+    )
+
+    if not metrics:
+        empty_report = {
+            "metrics": [],
+            "accepted_images": 0,
+            "missing": {
+                "x": ["left", "center", "right"],
+                "y": ["bottom", "middle", "top"],
+                "size": ["close/large", "far/small", "medium"],
+                "tilt": ["front-on", "moderately tilted"],
+                "quadrants": ["LB", "LT", "RB", "RT"],
+            },
+            "sets": {
+                "x": set(),
+                "y": set(),
+                "size": set(),
+                "tilt": set(),
+                "quadrants": set(),
+            },
+        }
+        return False, progress, empty_report
+
+    report = compute_bin_coverage(list(metrics))
+    missing = report["missing"]
+
+    spatial_good = (
+        not missing["x"]
+        and not missing["y"]
+        and not missing["quadrants"]
+    )
+
+    # Size and tilt bins are useful suggestions, but Size and Skew are already
+    # required through the numeric progress bars. Do not double-gate them here.
+    goodenough = range_good and spatial_good
+
+    return goodenough, progress, report
 
 def format_progress(
     progress: List[Tuple[str, float, float, float]],
