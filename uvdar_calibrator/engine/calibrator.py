@@ -262,7 +262,7 @@ class Calibrator:
     # Calibration over the accepted db
     # ------------------------------------------------------------------
 
-    def _assemble(self):
+    def assemble(self):
         """Assemble solver arrays from the accepted samples only."""
         n = len(self.db)
         n_points = self.board.n_points
@@ -297,7 +297,7 @@ class Calibrator:
             raise RuntimeError("Image size unknown; no frames were processed.")
 
         width, height = self.image_size
-        Xp_abs, Yp_abs, ima_proc = self._assemble()
+        Xp_abs, Yp_abs, ima_proc = self.assemble()
 
         model = OCamModel(
             xc=height / 2.0,
@@ -420,7 +420,7 @@ class Calibrator:
             print("\nNo calibration data available. You must first calibrate your camera.\n")
             return
 
-        Xp_abs, Yp_abs, ima_proc = self._assemble()
+        Xp_abs, Yp_abs, ima_proc = self.assemble()
         saving_calib(
             self.last_ocam_model,
             self.RRfin,

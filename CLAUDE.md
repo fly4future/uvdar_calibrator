@@ -81,8 +81,9 @@ smaller/farther-captured UV grid — see the note at their definition.
 ### The solver (`engine/ocam_model.py`)
 
 Pure math over `(Xt, Yt, Xp_abs, Yp_abs, xc, yc, ...)` arrays — no knowledge of samples,
-goodness, or GUI state. `ima_proc` holds **1-based** (MATLAB-style) image numbers and `_idx()`
-converts to 0-based numpy indices wherever an array is touched. Keep this convention when
+goodness, or GUI state. `ima_proc` holds **1-based** (MATLAB-style) image numbers and `idx()`
+converts to 0-based numpy indices wherever an array is touched; it's public (not `_idx`)
+specifically because `diagnostics/plots.py` needs the same conversion. Keep this convention when
 adding code that walks `ima_proc` — mixing 0- and 1-based indices here is the easiest way to
 silently corrupt results. `taylor_order` default is 4; `min_order` is hardcoded to 4 in
 `omni_find_parameters_fun`.

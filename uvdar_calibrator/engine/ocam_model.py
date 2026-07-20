@@ -10,7 +10,7 @@ knowledge of why those particular corners were chosen.
 
 Conventions (load-bearing -- do not "fix"):
 
-- ``ima_proc`` holds MATLAB-style **1-based** image numbers; ``_idx()``
+- ``ima_proc`` holds MATLAB-style **1-based** image numbers; ``idx()``
   converts to a 0-based Python/numpy index wherever an array is touched.
 - Detected marker points are stored ``[row, col]`` (``Xp_abs`` = row,
   ``Yp_abs`` = col) -- the reverse of OpenCV's usual ``[x, y]``.
@@ -52,7 +52,7 @@ class OCamModel:
     invpol: Optional[np.ndarray] = None
 
 
-def _idx(i: int) -> int:
+def idx(i: int) -> int:
     """Convert MATLAB-style 1-based image number to Python index."""
     return int(i) - 1
 
@@ -369,7 +369,7 @@ def calibrate(
     RRfin = np.zeros((3, 3, n_ima), dtype=float)
 
     for kk in ima_proc:
-        k = _idx(kk)
+        k = idx(kk)
 
         Ypt = _as_col(Yp[:, 0, k])
         Xpt = _as_col(Xp[:, 0, k])
@@ -521,7 +521,7 @@ def omni_find_parameters_fun(
 
         for i in ima_proc:
             count += 1
-            k = _idx(i)
+            k = idx(i)
 
             RRdef = RRfin[:, :, k]
 
@@ -592,7 +592,7 @@ def omni_find_parameters_fun(
 
     for j in ima_proc:
         count += 1
-        k = _idx(j)
+        k = idx(j)
 
         RRfin[2, 2, k] = s[len(ss_raw) + count - 1]
 
@@ -619,7 +619,7 @@ def reprojectpoints(
     MSE = 0.0
 
     for i in ima_proc:
-        k = _idx(i)
+        k = idx(i)
 
         xx = RRfin[:, :, k] @ np.vstack(
             [
@@ -691,7 +691,7 @@ def reprojectPoints_fun(
     Yt = _as_col(Yt)
 
     for i in ima_proc:
-        k = _idx(i)
+        k = idx(i)
 
         xx = RRfin[:, :, k] @ np.vstack(
             [
@@ -737,7 +737,7 @@ def reprojectpoints_adv(
     MSE = 0.0
 
     for i in ima_proc:
-        k = _idx(i)
+        k = idx(i)
 
         Mc = RRfin[:, :, k] @ M.T
 
@@ -1044,7 +1044,7 @@ def recomp_corner_calib(
     kept_total = 0
 
     for kk in ima_proc:
-        k = _idx(kk)
+        k = idx(kk)
         I = images[k].astype(np.uint8)  # noqa: E741 -- MATLAB port keeps upstream's name
 
         # OpenCV cornerSubPix expects points as [col, row]. Existing data stores

@@ -561,7 +561,7 @@ class _BaseCalibrationApp:
             if not self.no_plots.get():
                 from ..diagnostics import plots
 
-                Xp_abs, Yp_abs, ima_proc = cal._assemble()
+                Xp_abs, Yp_abs, ima_proc = cal.assemble()
                 plots.reproject_calib(
                     cal.last_ocam_model, cal.RRfin, ima_proc, cal.Xt, cal.Yt,
                     Xp_abs, Yp_abs,

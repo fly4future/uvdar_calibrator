@@ -250,7 +250,7 @@ def run(
     if do_plots:
         from ..diagnostics import plots
 
-        Xp_abs, Yp_abs, ima_proc = cal._assemble()
+        Xp_abs, Yp_abs, ima_proc = cal.assemble()
 
         print("\nStep 6: Reproject on images")
         plots.reproject_calib(

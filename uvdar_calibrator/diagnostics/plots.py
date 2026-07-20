@@ -14,7 +14,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from ..engine.ocam_model import (
-    _idx,
+    idx,
     OCamModel,
     omni3d2pixel,
     reprojectpoints_adv,
@@ -130,7 +130,7 @@ def reproject_calib(
         return
 
     for kk in ima_proc:
-        k = _idx(kk)
+        k = idx(kk)
 
         if images is not None and k < len(images):
             I = images[k]  # noqa: E741 -- MATLAB port keeps upstream's name
@@ -228,7 +228,7 @@ def analyse_error(
         ocam_model.e = 0.0
 
     for i in ima_proc:
-        k = _idx(i)
+        k = idx(i)
 
         xx = RRfin[:, :, k] @ np.vstack(
             [
@@ -384,7 +384,7 @@ def show_extrinsic(
     )
 
     for i in ima_proc:
-        k = _idx(i)
+        k = idx(i)
         T = RRfin[:, 2, k]
 
         ax.scatter(T[0], T[1], T[2], marker="^")
