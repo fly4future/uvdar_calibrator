@@ -179,7 +179,7 @@ class _BaseCalibrationApp:
         self.image_label.pack(side=tk.LEFT, padx=12)
 
         title = ttk.Label(right, text="Calibration Progress", font=("Segoe UI", 14, "bold"))
-        title.pack(anchor="w")
+        title.pack(anchor="center")
         self.status_label = ttk.Label(
             right, text="Status: no images analyzed", wraplength=320, justify="center"
         )
@@ -190,7 +190,7 @@ class _BaseCalibrationApp:
             right, width=320, height=140, bg="white",
             highlightthickness=1, highlightbackground="#ccc",
         )
-        self.bar_canvas.pack(anchor="w", pady=(0, 10))
+        self.bar_canvas.pack(anchor="center", pady=(0, 10))
         self._draw_bars([])
 
         ttk.Label(
