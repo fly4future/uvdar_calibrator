@@ -97,11 +97,18 @@ class _BaseCalibrationApp:
         self.output_dir = tk.StringVar(value=output_dir)
         self.slow_find_center = tk.BooleanVar(value=slow_find_center)
         # Advanced/launch-time-only settings (fov_radius_frac, sample
-        # selection tuning, ...) that aren't exposed as widgets -- set once
-        # at launch, merged with the live board/taylor_order widget values
-        # when a Calibrator is actually constructed. See
-        # coverage.get_parameters for why fov_radius_frac matters.
+        # selection tuning, ...), editable via the "Advanced Settings..."
+        # dialog (_open_advanced_settings) rather than always-visible
+        # widgets, since most sessions won't need them -- merged with the
+        # live board/taylor_order widget values when a Calibrator is
+        # actually constructed. See coverage.get_parameters for why
+        # fov_radius_frac matters.
         self.calib_config = config
+        # LiveCalibrationApp sets this True: its Calibrator is already
+        # built by live_node.py's main() and never rebuilt, so the dialog
+        # there can only display the real launch-time settings, not edit
+        # them (same reasoning as board_option_widgets being disabled).
+        self._advanced_settings_read_only = False
         self.no_plots = tk.BooleanVar(value=True)
         self.forward_view_var = tk.BooleanVar(value=False)
 
@@ -147,6 +154,9 @@ class _BaseCalibrationApp:
         w = ttk.Spinbox(opts, from_=4, to=10, textvariable=self.taylor_order, width=5)
         w.pack(side=tk.LEFT, padx=4)
         self.board_option_widgets.append(w)
+        ttk.Button(
+            opts, text="Advanced Settings...", command=self._open_advanced_settings
+        ).pack(side=tk.LEFT, padx=(12, 0))
         ttk.Checkbutton(
             opts, text="MATLAB-style slow Find Center", variable=self.slow_find_center
         ).pack(side=tk.LEFT, padx=12)
@@ -238,6 +248,161 @@ class _BaseCalibrationApp:
 
         self.bottom_status = ttk.Label(self.root, text="", relief=tk.SUNKEN, anchor="w", padding=4)
         self.bottom_status.pack(side=tk.BOTTOM, fill=tk.X)
+
+    def _open_advanced_settings(self):
+        """
+        Modal dialog for the CalibratorConfig fields that aren't
+        always-visible widgets: fov_radius_frac, sample_threshold,
+        param_ranges (X/Y/Size/Skew), min_db_size, max_accepted_samples,
+        save_previews_for_rejected. Editable in batch mode; read-only in
+        live mode, where the running Calibrator can't be reconfigured
+        mid-capture (see self._advanced_settings_read_only).
+        """
+        cfg = self.calib_config
+        read_only = self._advanced_settings_read_only
+
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Advanced Settings")
+        dialog.transient(self.root)
+        dialog.resizable(False, False)
+
+        body = ttk.Frame(dialog, padding=12)
+        body.pack(fill=tk.BOTH, expand=True)
+
+        interactive_widgets = []
+
+        def _fmt(value):
+            return "" if value is None else str(value)
+
+        def _labeled_entry(row, label, value, hint):
+            ttk.Label(body, text=label).grid(row=row, column=0, sticky="w", pady=3)
+            var = tk.StringVar(value=_fmt(value))
+            entry = ttk.Entry(body, textvariable=var, width=10)
+            entry.grid(row=row, column=1, sticky="w", padx=6)
+            interactive_widgets.append(entry)
+            ttk.Label(
+                body, text=hint, font=("Segoe UI", 8), foreground="#666",
+            ).grid(row=row, column=2, sticky="w")
+            return var
+
+        row = 0
+
+        fov_var = _labeled_entry(
+            row, "FOV radius fraction:", cfg.fov_radius_frac,
+            "fisheye usable-circle radius, fraction of min(w,h)/2; blank = full frame",
+        )
+        row += 1
+
+        threshold_var = _labeled_entry(
+            row, "Sample threshold:", cfg.sample_threshold,
+            "min L1 distance for a new sample to be accepted",
+        )
+        row += 1
+
+        ttk.Label(body, text="Param ranges:").grid(row=row, column=0, sticky="w", pady=3)
+        ranges_frame = ttk.Frame(body)
+        ranges_frame.grid(row=row, column=1, columnspan=2, sticky="w")
+        range_vars = []
+        for name, value in zip(coverage.PARAM_NAMES, cfg.param_ranges):
+            ttk.Label(ranges_frame, text=f"{name}:").pack(side=tk.LEFT)
+            v = tk.StringVar(value=_fmt(value))
+            entry = ttk.Entry(ranges_frame, textvariable=v, width=6)
+            entry.pack(side=tk.LEFT, padx=(2, 8))
+            interactive_widgets.append(entry)
+            range_vars.append(v)
+        row += 1
+
+        min_db_var = _labeled_entry(
+            row, "Min DB size:", cfg.min_db_size,
+            "accepted-sample count that forces readiness regardless of range coverage",
+        )
+        row += 1
+
+        max_samples_var = _labeled_entry(
+            row, "Max accepted samples:", cfg.max_accepted_samples,
+            "hard cap on retained samples; blank = unbounded",
+        )
+        row += 1
+
+        save_previews_var = tk.BooleanVar(value=cfg.save_previews_for_rejected)
+        save_previews_check = ttk.Checkbutton(
+            body, text="Save previews for rejected frames too", variable=save_previews_var,
+        )
+        save_previews_check.grid(row=row, column=0, columnspan=3, sticky="w", pady=(6, 0))
+        interactive_widgets.append(save_previews_check)
+        row += 1
+
+        if read_only:
+            for widget in interactive_widgets:
+                widget.configure(state="disabled")
+            ttk.Label(
+                body,
+                text=(
+                    "Read-only: this live session's Calibrator is already running "
+                    "and can't be reconfigured mid-capture."
+                ),
+                font=("Segoe UI", 8, "italic"), foreground="#a00", wraplength=360,
+            ).grid(row=row, column=0, columnspan=3, sticky="w", pady=(10, 0))
+            row += 1
+
+        actions = ttk.Frame(body)
+        actions.grid(row=row, column=0, columnspan=3, sticky="e", pady=(12, 0))
+
+        def _close():
+            dialog.destroy()
+
+        if read_only:
+            ttk.Button(actions, text="Close", command=_close).pack(side=tk.LEFT)
+        else:
+            def _save():
+                try:
+                    fov_text = fov_var.get().strip()
+                    fov_radius_frac = None
+                    if fov_text:
+                        fov_radius_frac = float(fov_text)
+                        if fov_radius_frac <= 0:
+                            raise ValueError("FOV radius fraction must be > 0.")
+
+                    sample_threshold = float(threshold_var.get().strip())
+                    if sample_threshold <= 0:
+                        raise ValueError("Sample threshold must be > 0.")
+
+                    param_ranges = tuple(float(v.get().strip()) for v in range_vars)
+                    if any(r <= 0 for r in param_ranges):
+                        raise ValueError("All param ranges must be > 0.")
+
+                    min_db_size = int(min_db_var.get().strip())
+                    if min_db_size <= 0:
+                        raise ValueError("Min DB size must be a positive integer.")
+
+                    max_text = max_samples_var.get().strip()
+                    max_accepted_samples = None
+                    if max_text:
+                        max_accepted_samples = int(max_text)
+                        if max_accepted_samples <= 0:
+                            raise ValueError(
+                                "Max accepted samples must be a positive integer, or blank."
+                            )
+                except ValueError as exc:
+                    messagebox.showerror("Invalid value", str(exc))
+                    return
+
+                self.calib_config = replace(
+                    self.calib_config,
+                    fov_radius_frac=fov_radius_frac,
+                    sample_threshold=sample_threshold,
+                    param_ranges=param_ranges,
+                    min_db_size=min_db_size,
+                    max_accepted_samples=max_accepted_samples,
+                    save_previews_for_rejected=save_previews_var.get(),
+                )
+                dialog.destroy()
+
+            ttk.Button(actions, text="Cancel", command=_close).pack(side=tk.LEFT, padx=(0, 6))
+            ttk.Button(actions, text="Save", command=_save).pack(side=tk.LEFT)
+
+        dialog.grab_set()
+        dialog.wait_window()
 
     def _set_status(self, text):
         self.bottom_status.configure(text=text)
@@ -752,9 +917,11 @@ class LiveCalibrationApp(_BaseCalibrationApp):
 
         self.calibrator = calibrator
         # Board geometry / Taylor order are fixed at node start (CLI flags);
-        # the running Calibrator cannot be re-configured mid-capture.
+        # the running Calibrator cannot be re-configured mid-capture. Same
+        # for the advanced settings dialog -- it becomes view-only.
         for widget in self.board_option_widgets:
             widget.configure(state="disabled")
+        self._advanced_settings_read_only = True
 
         self._refresh_capture_button()
         self._set_status(f"Live capture running on topic '{initial_topic}'.")
