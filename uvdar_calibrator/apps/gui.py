@@ -343,11 +343,24 @@ class _BaseCalibrationApp:
             c.create_text(x1 + 10, y, text=f"{100.0 * p:.0f}%", anchor="w", font=("Segoe UI", 9))
             y += 32
 
+    def _skew_color(self, skew: float) -> str:
+        """Interpolate a dot's fill color by skew: light blue (0) -> dark orange (1)."""
+        s = max(0.0, min(1.0, skew))
+        r1, g1, b1 = (0x9e, 0xca, 0xe1)  # light blue, low skew/tilt
+        r2, g2, b2 = (0xe6, 0x55, 0x0d)  # dark orange, high skew/tilt
+        return "#%02x%02x%02x" % (
+            round(r1 + (r2 - r1) * s),
+            round(g1 + (g2 - g1) * s),
+            round(b1 + (b2 - b1) * s),
+        )
+
     def _draw_coverage_graph(self):
         """
         Scatter plot of accepted samples' board position (x, y) in the
-        image, marker size ~ apparent board size -- shows at a glance where
-        the board has already been captured, complementing the range bars.
+        image -- shows at a glance where the board has already been
+        captured, complementing the range bars. Marker size ~ apparent
+        board size; marker color ~ skew/tilt (light -> dark = low -> high),
+        since skew has no natural x/y-position representation of its own.
         Reuses the params already computed by coverage.get_parameters on
         each accepted Sample, no extra computation needed.
         """
@@ -369,6 +382,12 @@ class _BaseCalibrationApp:
         c.create_text((x0 + x1) / 2, y1 + 8, text="left → right (X)", font=("Segoe UI", 7))
         c.create_text(x0 - 8, (y0 + y1) / 2, text="top\n↓\nbtm", font=("Segoe UI", 6), justify="center")
 
+        # Skew color legend, top-left.
+        c.create_oval(x0 + 2, 2, x0 + 10, 10, outline="", fill=self._skew_color(0.0))
+        c.create_text(x0 + 13, 6, text="low skew", anchor="w", fill="#333", font=("Segoe UI", 7))
+        c.create_oval(x0 + 68, 2, x0 + 76, 10, outline="", fill=self._skew_color(1.0))
+        c.create_text(x0 + 79, 6, text="high skew", anchor="w", fill="#333", font=("Segoe UI", 7))
+
         cal = self.calibrator
         if cal is None or not cal.db:
             c.create_text(
@@ -381,6 +400,7 @@ class _BaseCalibrationApp:
             px = max(0.0, min(1.0, float(sample.params[0])))
             py = max(0.0, min(1.0, float(sample.params[1])))
             psize = max(0.0, float(sample.params[2]))
+            pskew = max(0.0, min(1.0, float(sample.params[3])))
 
             x = x0 + px * (x1 - x0)
             y = y0 + py * (y1 - y0)
@@ -388,7 +408,7 @@ class _BaseCalibrationApp:
 
             c.create_oval(
                 x - radius, y - radius, x + radius, y + radius,
-                outline="#1f77b4", fill="#9ecae1",
+                outline="#1f77b4", fill=self._skew_color(pskew),
             )
 
         c.create_text(
