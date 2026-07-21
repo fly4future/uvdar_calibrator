@@ -24,6 +24,7 @@ class so the apps never diverge.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 import queue
 
@@ -32,7 +33,7 @@ import numpy as np
 from ..engine import coverage
 from ..engine import ocam_model
 from ..engine.board import LedGridBoard
-from ..engine.calibrator import Calibrator
+from ..engine.calibrator import Calibrator, CalibratorConfig
 from ..engine.detection import find_image_files, read_image_gray
 
 try:
@@ -76,24 +77,38 @@ class _BaseCalibrationApp:
     def __init__(
         self,
         root,
-        n_sq_x: int = 6,
-        n_sq_y: int = 4,
-        spacing_mm: float = 50.0,
-        taylor_order: int = 4,
+        board: LedGridBoard | None = None,
+        config: CalibratorConfig | None = None,
         output_dir: str = ".",
         slow_find_center: bool = False,
     ):
+        board = board or LedGridBoard()
+        config = config or CalibratorConfig()
+
         self.root = root
         self.root.title("UV-DAR / OCamCalib Calibration Assistant")
-        self.root.geometry("1180x760")
-        self.root.minsize(1000, 650)
+        self.root.geometry("1180x980")
+        self.root.minsize(1000, 870)
 
-        self.n_sq_x = tk.IntVar(value=n_sq_x)
-        self.n_sq_y = tk.IntVar(value=n_sq_y)
-        self.spacing_mm = tk.DoubleVar(value=spacing_mm)
-        self.taylor_order = tk.IntVar(value=taylor_order)
+        self.n_sq_x = tk.IntVar(value=board.n_sq_x)
+        self.n_sq_y = tk.IntVar(value=board.n_sq_y)
+        self.spacing_mm = tk.DoubleVar(value=board.spacing_mm)
+        self.taylor_order = tk.IntVar(value=config.taylor_order)
         self.output_dir = tk.StringVar(value=output_dir)
         self.slow_find_center = tk.BooleanVar(value=slow_find_center)
+        # Advanced/launch-time-only settings (fov_radius_frac, sample
+        # selection tuning, ...), editable via the "Advanced Settings..."
+        # dialog (_open_advanced_settings) rather than always-visible
+        # widgets, since most sessions won't need them -- merged with the
+        # live board/taylor_order widget values when a Calibrator is
+        # actually constructed. See coverage.get_parameters for why
+        # fov_radius_frac matters.
+        self.calib_config = config
+        # LiveCalibrationApp sets this True: its Calibrator is already
+        # built by live_node.py's main() and never rebuilt, so the dialog
+        # there can only display the real launch-time settings, not edit
+        # them (same reasoning as board_option_widgets being disabled).
+        self._advanced_settings_read_only = False
         self.no_plots = tk.BooleanVar(value=True)
         self.forward_view_var = tk.BooleanVar(value=False)
 
@@ -139,6 +154,9 @@ class _BaseCalibrationApp:
         w = ttk.Spinbox(opts, from_=4, to=10, textvariable=self.taylor_order, width=5)
         w.pack(side=tk.LEFT, padx=4)
         self.board_option_widgets.append(w)
+        ttk.Button(
+            opts, text="Advanced Settings...", command=self._open_advanced_settings
+        ).pack(side=tk.LEFT, padx=(12, 0))
         ttk.Checkbutton(
             opts, text="MATLAB-style slow Find Center", variable=self.slow_find_center
         ).pack(side=tk.LEFT, padx=12)
@@ -175,17 +193,29 @@ class _BaseCalibrationApp:
         self.image_label.pack(side=tk.LEFT, padx=12)
 
         title = ttk.Label(right, text="Calibration Progress", font=("Segoe UI", 14, "bold"))
-        title.pack(anchor="w")
-        self.status_label = ttk.Label(right, text="Status: no images analyzed", wraplength=320)
-        self.status_label.pack(anchor="w", pady=(8, 8))
+        title.pack(anchor="center")
+        self.status_label = ttk.Label(
+            right, text="Status: no images analyzed", wraplength=320, justify="center"
+        )
+        self.status_label.pack(anchor="center", pady=(8, 8))
 
         # Four ROS-style range bars: X, Y, Size, Skew.
         self.bar_canvas = tk.Canvas(
             right, width=320, height=140, bg="white",
             highlightthickness=1, highlightbackground="#ccc",
         )
-        self.bar_canvas.pack(anchor="w", pady=(0, 10))
+        self.bar_canvas.pack(anchor="center", pady=(0, 10))
         self._draw_bars([])
+
+        ttk.Label(
+            right, text="Board position coverage:", font=("Segoe UI", 10, "bold")
+        ).pack(anchor="center")
+        self.coverage_canvas = tk.Canvas(
+            right, width=320, height=180, bg="white",
+            highlightthickness=1, highlightbackground="#ccc",
+        )
+        self.coverage_canvas.pack(anchor="center", pady=(4, 10))
+        self._draw_coverage_graph()
 
         ttk.Label(right, text="Sample log:", font=("Segoe UI", 10, "bold")).pack(anchor="w")
         self.log_box = tk.Text(right, height=10, width=44, wrap="word")
@@ -218,6 +248,161 @@ class _BaseCalibrationApp:
 
         self.bottom_status = ttk.Label(self.root, text="", relief=tk.SUNKEN, anchor="w", padding=4)
         self.bottom_status.pack(side=tk.BOTTOM, fill=tk.X)
+
+    def _open_advanced_settings(self):
+        """
+        Modal dialog for the CalibratorConfig fields that aren't
+        always-visible widgets: fov_radius_frac, sample_threshold,
+        param_ranges (X/Y/Size/Skew), min_db_size, max_accepted_samples,
+        save_previews_for_rejected. Editable in batch mode; read-only in
+        live mode, where the running Calibrator can't be reconfigured
+        mid-capture (see self._advanced_settings_read_only).
+        """
+        cfg = self.calib_config
+        read_only = self._advanced_settings_read_only
+
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Advanced Settings")
+        dialog.transient(self.root)
+        dialog.resizable(False, False)
+
+        body = ttk.Frame(dialog, padding=12)
+        body.pack(fill=tk.BOTH, expand=True)
+
+        interactive_widgets = []
+
+        def _fmt(value):
+            return "" if value is None else str(value)
+
+        def _labeled_entry(row, label, value, hint):
+            ttk.Label(body, text=label).grid(row=row, column=0, sticky="w", pady=3)
+            var = tk.StringVar(value=_fmt(value))
+            entry = ttk.Entry(body, textvariable=var, width=10)
+            entry.grid(row=row, column=1, sticky="w", padx=6)
+            interactive_widgets.append(entry)
+            ttk.Label(
+                body, text=hint, font=("Segoe UI", 8), foreground="#666",
+            ).grid(row=row, column=2, sticky="w")
+            return var
+
+        row = 0
+
+        fov_var = _labeled_entry(
+            row, "FOV radius fraction:", cfg.fov_radius_frac,
+            "fisheye usable-circle radius, fraction of min(w,h)/2; blank = full frame",
+        )
+        row += 1
+
+        threshold_var = _labeled_entry(
+            row, "Sample threshold:", cfg.sample_threshold,
+            "min L1 distance for a new sample to be accepted",
+        )
+        row += 1
+
+        ttk.Label(body, text="Param ranges:").grid(row=row, column=0, sticky="w", pady=3)
+        ranges_frame = ttk.Frame(body)
+        ranges_frame.grid(row=row, column=1, columnspan=2, sticky="w")
+        range_vars = []
+        for name, value in zip(coverage.PARAM_NAMES, cfg.param_ranges):
+            ttk.Label(ranges_frame, text=f"{name}:").pack(side=tk.LEFT)
+            v = tk.StringVar(value=_fmt(value))
+            entry = ttk.Entry(ranges_frame, textvariable=v, width=6)
+            entry.pack(side=tk.LEFT, padx=(2, 8))
+            interactive_widgets.append(entry)
+            range_vars.append(v)
+        row += 1
+
+        min_db_var = _labeled_entry(
+            row, "Min DB size:", cfg.min_db_size,
+            "accepted-sample count that forces readiness regardless of range coverage",
+        )
+        row += 1
+
+        max_samples_var = _labeled_entry(
+            row, "Max accepted samples:", cfg.max_accepted_samples,
+            "hard cap on retained samples; blank = unbounded",
+        )
+        row += 1
+
+        save_previews_var = tk.BooleanVar(value=cfg.save_previews_for_rejected)
+        save_previews_check = ttk.Checkbutton(
+            body, text="Save previews for rejected frames too", variable=save_previews_var,
+        )
+        save_previews_check.grid(row=row, column=0, columnspan=3, sticky="w", pady=(6, 0))
+        interactive_widgets.append(save_previews_check)
+        row += 1
+
+        if read_only:
+            for widget in interactive_widgets:
+                widget.configure(state="disabled")
+            ttk.Label(
+                body,
+                text=(
+                    "Read-only: this live session's Calibrator is already running "
+                    "and can't be reconfigured mid-capture."
+                ),
+                font=("Segoe UI", 8, "italic"), foreground="#a00", wraplength=360,
+            ).grid(row=row, column=0, columnspan=3, sticky="w", pady=(10, 0))
+            row += 1
+
+        actions = ttk.Frame(body)
+        actions.grid(row=row, column=0, columnspan=3, sticky="e", pady=(12, 0))
+
+        def _close():
+            dialog.destroy()
+
+        if read_only:
+            ttk.Button(actions, text="Close", command=_close).pack(side=tk.LEFT)
+        else:
+            def _save():
+                try:
+                    fov_text = fov_var.get().strip()
+                    fov_radius_frac = None
+                    if fov_text:
+                        fov_radius_frac = float(fov_text)
+                        if fov_radius_frac <= 0:
+                            raise ValueError("FOV radius fraction must be > 0.")
+
+                    sample_threshold = float(threshold_var.get().strip())
+                    if sample_threshold <= 0:
+                        raise ValueError("Sample threshold must be > 0.")
+
+                    param_ranges = tuple(float(v.get().strip()) for v in range_vars)
+                    if any(r <= 0 for r in param_ranges):
+                        raise ValueError("All param ranges must be > 0.")
+
+                    min_db_size = int(min_db_var.get().strip())
+                    if min_db_size <= 0:
+                        raise ValueError("Min DB size must be a positive integer.")
+
+                    max_text = max_samples_var.get().strip()
+                    max_accepted_samples = None
+                    if max_text:
+                        max_accepted_samples = int(max_text)
+                        if max_accepted_samples <= 0:
+                            raise ValueError(
+                                "Max accepted samples must be a positive integer, or blank."
+                            )
+                except ValueError as exc:
+                    messagebox.showerror("Invalid value", str(exc))
+                    return
+
+                self.calib_config = replace(
+                    self.calib_config,
+                    fov_radius_frac=fov_radius_frac,
+                    sample_threshold=sample_threshold,
+                    param_ranges=param_ranges,
+                    min_db_size=min_db_size,
+                    max_accepted_samples=max_accepted_samples,
+                    save_previews_for_rejected=save_previews_var.get(),
+                )
+                dialog.destroy()
+
+            ttk.Button(actions, text="Cancel", command=_close).pack(side=tk.LEFT, padx=(0, 6))
+            ttk.Button(actions, text="Save", command=_save).pack(side=tk.LEFT)
+
+        dialog.grab_set()
+        dialog.wait_window()
 
     def _set_status(self, text):
         self.bottom_status.configure(text=text)
@@ -252,6 +437,7 @@ class _BaseCalibrationApp:
             cal.db_params(), cal.param_ranges, cal.min_db_size
         )
         self._draw_bars(progress)
+        self._draw_coverage_graph()
 
         n = len(cal.db)
         if goodenough:
@@ -269,6 +455,7 @@ class _BaseCalibrationApp:
             m = coverage.sample_metric(
                 sample.corners, cal.board, cal.image_size,
                 label=Path(sample.image_path).name,
+                valid_region=cal.valid_region_px(),
             )
             if m is not None:
                 metrics.append(m)
@@ -326,6 +513,85 @@ class _BaseCalibrationApp:
                 )
             c.create_text(x1 + 10, y, text=f"{100.0 * p:.0f}%", anchor="w", font=("Segoe UI", 9))
             y += 32
+
+    def _skew_color(self, skew: float) -> str:
+        """Interpolate a dot's fill color by skew: light blue (0) -> dark orange (1)."""
+        s = max(0.0, min(1.0, skew))
+        r1, g1, b1 = (0x9e, 0xca, 0xe1)  # light blue, low skew/tilt
+        r2, g2, b2 = (0xe6, 0x55, 0x0d)  # dark orange, high skew/tilt
+        return "#%02x%02x%02x" % (
+            round(r1 + (r2 - r1) * s),
+            round(g1 + (g2 - g1) * s),
+            round(b1 + (b2 - b1) * s),
+        )
+
+    def _draw_coverage_graph(self):
+        """
+        Scatter plot of accepted samples' board position (x, y) in the
+        image -- shows at a glance where the board has already been
+        captured, complementing the range bars. Marker size ~ apparent
+        board size; marker color ~ skew/tilt (light -> dark = low -> high),
+        since skew has no natural x/y-position representation of its own.
+        Reuses the params already computed by coverage.get_parameters on
+        each accepted Sample, no extra computation needed.
+        """
+        c = self.coverage_canvas
+        c.delete("all")
+
+        width, height = 320, 180
+        margin = 14
+        margin_left = 24  # wider than `margin` so the vertical axis label fits
+        x0, y0 = margin_left, margin
+        x1, y1 = width - margin, height - margin
+
+        c.create_rectangle(x0, y0, x1, y1, outline="#999", fill="#fafafa")
+        for frac in (1 / 3, 2 / 3):
+            x = x0 + frac * (x1 - x0)
+            y = y0 + frac * (y1 - y0)
+            c.create_line(x, y0, x, y1, fill="#ddd", dash=(3, 3))
+            c.create_line(x0, y, x1, y, fill="#ddd", dash=(3, 3))
+
+        c.create_text((x0 + x1) / 2, y1 + 8, text="left → right (X)", font=("Segoe UI", 7))
+        # anchor="w" at a fixed small x keeps this inside the canvas -- centering
+        # it under x0 (as before) could push its bbox to a negative x and clip it.
+        c.create_text(
+            4, (y0 + y1) / 2, text="top\n↓\nbtm", font=("Segoe UI", 6),
+            justify="center", anchor="w",
+        )
+
+        # Skew color legend, top-left.
+        c.create_oval(x0 + 2, 2, x0 + 10, 10, outline="", fill=self._skew_color(0.0))
+        c.create_text(x0 + 13, 6, text="low skew", anchor="w", fill="#333", font=("Segoe UI", 7))
+        c.create_oval(x0 + 68, 2, x0 + 76, 10, outline="", fill=self._skew_color(1.0))
+        c.create_text(x0 + 79, 6, text="high skew", anchor="w", fill="#333", font=("Segoe UI", 7))
+
+        cal = self.calibrator
+        if cal is None or not cal.db:
+            c.create_text(
+                (x0 + x1) / 2, (y0 + y1) / 2,
+                text="No accepted samples yet", fill="#777", font=("Segoe UI", 9),
+            )
+            return
+
+        for sample in cal.db:
+            px = max(0.0, min(1.0, float(sample.params[0])))
+            py = max(0.0, min(1.0, float(sample.params[1])))
+            psize = max(0.0, float(sample.params[2]))
+            pskew = max(0.0, min(1.0, float(sample.params[3])))
+
+            x = x0 + px * (x1 - x0)
+            y = y0 + py * (y1 - y0)
+            radius = max(3, min(11, 3 + 18 * psize))
+
+            c.create_oval(
+                x - radius, y - radius, x + radius, y + radius,
+                outline="#1f77b4", fill=self._skew_color(pskew),
+            )
+
+        c.create_text(
+            x1, 6, text=f"{len(cal.db)} accepted",
+            anchor="ne", fill="#333", font=("Segoe UI", 8),
+        )
 
     # ------------------------------------------------------------------
     # Frame rendering / sample browsing
@@ -460,7 +726,7 @@ class _BaseCalibrationApp:
             if not self.no_plots.get():
                 from ..diagnostics import plots
 
-                Xp_abs, Yp_abs, ima_proc = cal._assemble()
+                Xp_abs, Yp_abs, ima_proc = cal.assemble()
                 plots.reproject_calib(
                     cal.last_ocam_model, cal.RRfin, ima_proc, cal.Xt, cal.Yt,
                     Xp_abs, Yp_abs,
@@ -571,11 +837,12 @@ class BatchCalibrationApp(_BaseCalibrationApp):
                 n_sq_y=int(self.n_sq_y.get()),
                 spacing_mm=float(self.spacing_mm.get()),
             )
-            self.calibrator = Calibrator(
-                board,
+            run_config = replace(
+                self.calib_config,
                 taylor_order=int(self.taylor_order.get()),
                 preview_dir=str(Path(self.image_dir.get()) / "detected_marker_previews"),
             )
+            self.calibrator = Calibrator(board, run_config)
             self.current_sample_index = 0
             self.save_button.configure(state="disabled")
             self.forward_view_var.set(False)
@@ -612,11 +879,14 @@ class LiveCalibrationApp(_BaseCalibrationApp):
     Live-topic app driven by the ROS 2 subscriber in ``live_node``.
 
     Replaces the folder controls with an image-topic field and a
-    Start/Stop capture toggle; frames are processed by a background
-    consumer thread and their ``FrameResult``s drained here via
-    ``root.after`` polling. The canvas follows the most recently
-    processed live frame while capturing; Previous/Next still browse the
-    accepted samples.
+    Start/Stop capture toggle. Two queues are drained independently:
+    ``preview_queue`` (unthrottled -- always the freshest camera frame, for
+    a responsive live view) and ``result_queue`` (throttled by
+    ``--rate_hz`` -- processed ``FrameResult``s, for the sample
+    log/accept-reject/progress panel). They used to share one throttled
+    queue, so the live view could only update as fast as detection
+    completed; decoupling them means the camera view stays live regardless
+    of detection cost. Previous/Next still browse the accepted samples.
     """
 
     POLL_MS = 50
@@ -626,25 +896,32 @@ class LiveCalibrationApp(_BaseCalibrationApp):
         root,
         calibrator: Calibrator,
         result_queue,
+        preview_queue,
         consumer,
         subscribe_fn,
         initial_topic: str = "image",
         **kwargs,
     ):
         self.result_queue = result_queue
+        self.preview_queue = preview_queue
         self.consumer = consumer
         self.subscribe_fn = subscribe_fn
         self.topic = tk.StringVar(value=initial_topic)
         self._subscribed_topic = initial_topic
         self.n_rejected = 0
         self.n_failed = 0
+        self._latest_preview = None
+        self._latest_corners = None
+        self._latest_outcome = "waiting for first processed frame"
         super().__init__(root, **kwargs)
 
         self.calibrator = calibrator
         # Board geometry / Taylor order are fixed at node start (CLI flags);
-        # the running Calibrator cannot be re-configured mid-capture.
+        # the running Calibrator cannot be re-configured mid-capture. Same
+        # for the advanced settings dialog -- it becomes view-only.
         for widget in self.board_option_widgets:
             widget.configure(state="disabled")
+        self._advanced_settings_read_only = True
 
         self._refresh_capture_button()
         self._set_status(f"Live capture running on topic '{initial_topic}'.")
@@ -682,39 +959,55 @@ class LiveCalibrationApp(_BaseCalibrationApp):
         self._refresh_capture_button()
 
     def _poll_queue(self):
-        latest = None
+        """
+        Drain both queues independently every tick.
+
+        result_queue (throttled by --rate_hz) drives accept/reject
+        bookkeeping, the sample log, and the progress panel -- unchanged
+        from before. preview_queue (unthrottled) drives what's rendered on
+        the canvas, so the live view keeps updating every tick even when no
+        new processed result has arrived yet.
+        """
+        got_result = False
         while True:
             try:
-                result, image = self.result_queue.get_nowait()
+                result, _image = self.result_queue.get_nowait()
             except queue.Empty:
                 break
-            latest = (result, image)
-            if result.detected and not result.accepted:
+            got_result = True
+            self._latest_corners = result.corners
+            if result.accepted:
+                self._latest_outcome = f"ACCEPTED as sample {len(self.calibrator.db)}"
+                # Keep browsing anchored to the newest accepted sample.
+                self.current_sample_index = len(self.calibrator.db) - 1
+            elif result.detected:
+                self._latest_outcome = "detected but rejected (too similar)"
                 self.n_rejected += 1
-            elif not result.detected:
+            else:
+                self._latest_outcome = "no markers detected"
                 self.n_failed += 1
             self._append_log(result.reason)
 
-        if latest is not None:
-            result, image = latest
+        if got_result:
             self._update_progress_panel()
-            if self.consumer.capturing.is_set():
-                if result.accepted:
-                    outcome = f"ACCEPTED as sample {len(self.calibrator.db)}"
-                elif result.detected:
-                    outcome = "rejected (too similar)"
-                else:
-                    outcome = "no markers detected"
-                img, pts = self._apply_forward_view(image, result.corners)
-                self._render_frame(img, pts, f"Live frame: {outcome}")
-                self._set_status(
-                    f"Live capture on '{self._subscribed_topic}': "
-                    f"{len(self.calibrator.db)} accepted, {self.n_rejected} rejected, "
-                    f"{self.n_failed} without detection."
-                )
-                # Keep browsing anchored to the newest accepted sample.
-                if result.accepted:
-                    self.current_sample_index = len(self.calibrator.db) - 1
+
+        latest_preview = None
+        while True:
+            try:
+                latest_preview = self.preview_queue.get_nowait()
+            except queue.Empty:
+                break
+        if latest_preview is not None:
+            self._latest_preview = latest_preview
+
+        if self.consumer.capturing.is_set() and self._latest_preview is not None:
+            img, pts = self._apply_forward_view(self._latest_preview, self._latest_corners)
+            self._render_frame(img, pts, f"Live preview: {self._latest_outcome}")
+            self._set_status(
+                f"Live capture on '{self._subscribed_topic}': "
+                f"{len(self.calibrator.db)} accepted, {self.n_rejected} rejected, "
+                f"{self.n_failed} without detection."
+            )
 
         self.root.after(self.POLL_MS, self._poll_queue)
 
@@ -731,10 +1024,8 @@ def launch_gui(
     image_dir: str = "photos",
     base_name: str = "",
     extension: str = "all",
-    n_sq_x: int = 6,
-    n_sq_y: int = 4,
-    spacing_mm: float = 50.0,
-    taylor_order: int = 4,
+    board: LedGridBoard | None = None,
+    config: CalibratorConfig | None = None,
     output_dir: str = ".",
     slow_find_center: bool = False,
 ) -> None:
@@ -746,10 +1037,8 @@ def launch_gui(
         image_dir=image_dir,
         base_name=base_name,
         extension=extension,
-        n_sq_x=n_sq_x,
-        n_sq_y=n_sq_y,
-        spacing_mm=spacing_mm,
-        taylor_order=taylor_order,
+        board=board,
+        config=config,
         output_dir=output_dir,
         slow_find_center=slow_find_center,
     )
@@ -759,6 +1048,7 @@ def launch_gui(
 def launch_live_gui(
     calibrator: Calibrator,
     result_queue,
+    preview_queue,
     consumer,
     subscribe_fn,
     initial_topic: str = "image",
@@ -772,13 +1062,16 @@ def launch_live_gui(
         root,
         calibrator=calibrator,
         result_queue=result_queue,
+        preview_queue=preview_queue,
         consumer=consumer,
         subscribe_fn=subscribe_fn,
         initial_topic=initial_topic,
-        n_sq_x=calibrator.board.n_sq_x,
-        n_sq_y=calibrator.board.n_sq_y,
-        spacing_mm=calibrator.board.spacing_mm,
-        taylor_order=calibrator.taylor_order,
+        # The live Calibrator is already built (by live_node.py's main());
+        # this seeds the (disabled, display-only) board/taylor widgets and
+        # keeps self.calib_config in sync with the real running Calibrator,
+        # not defaults, in case anything ever reads it on the live path.
+        board=calibrator.board,
+        config=CalibratorConfig.from_calibrator(calibrator),
         output_dir=output_dir,
         slow_find_center=slow_find_center,
     )

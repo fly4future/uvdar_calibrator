@@ -63,30 +63,100 @@ class FrameResult:
     goodenough: bool = False
 
 
+@dataclass
+class CalibratorConfig:
+    """
+    Non-board Calibrator settings: solver + sample-selection tuning, plus
+    the live-camera lens property (fov_radius_frac).
+
+    Bundled into one object so callers pass it around as a single value
+    instead of re-declaring each field as a separate parameter at every
+    hop (CLI argparser -> run()/main() -> Calibrator; GUI launch functions
+    -> app -> Calibrator) -- that duplication previously meant adding one
+    new setting required editing 6+ call sites across cli.py, live_node.py,
+    and gui.py. board geometry (n_sq_x/n_sq_y/spacing_mm) is deliberately
+    NOT here -- it already has its own home in LedGridBoard.
+    """
+
+    taylor_order: int = 4
+    preview_dir: Optional[str] = None
+    sample_threshold: float = coverage.DEFAULT_SAMPLE_THRESHOLD
+    param_ranges: Tuple[float, float, float, float] = coverage.DEFAULT_PARAM_RANGES
+    min_db_size: int = coverage.DEFAULT_MIN_DB_SIZE
+    save_previews_for_rejected: bool = True
+    # Fraction of min(width, height)/2 covered by the camera's usable (e.g.
+    # fisheye) image circle, assumed centered on the frame. None (default)
+    # means "use the full rectangular frame" -- see coverage.get_parameters'
+    # valid_region for why this matters.
+    fov_radius_frac: Optional[float] = None
+    # Hard cap on len(db): once reached, further frames are rejected rather
+    # than appended, so accepted samples' full-resolution images (retained
+    # for diagnostic plots and sample browsing) can't grow unbounded over a
+    # long-running session. None (default) means no cap -- fine for batch
+    # mode, where db size is already bounded by the folder's file count;
+    # live_node.py sets a real default since a live session has no such
+    # natural bound. Unrelated to min_db_size, which is a *readiness*
+    # threshold, not a retention limit.
+    max_accepted_samples: Optional[int] = None
+
+    @classmethod
+    def from_calibrator(cls, calibrator: Calibrator) -> CalibratorConfig:
+        """
+        Reconstruct the config a live Calibrator was built with, by reading
+        its instance attributes back.
+
+        For callers that need a CalibratorConfig reflecting an
+        already-running Calibrator's actual settings (e.g. the live GUI,
+        which seeds its own launch-time-only config from the Calibrator
+        live_node.py already built) rather than defaults -- listing each
+        field individually at the call site is exactly the kind of
+        duplication CalibratorConfig itself exists to avoid.
+        """
+        return cls(
+            taylor_order=calibrator.taylor_order,
+            preview_dir=str(calibrator.preview_dir) if calibrator.preview_dir else None,
+            sample_threshold=calibrator.sample_threshold,
+            param_ranges=calibrator.param_ranges,
+            min_db_size=calibrator.min_db_size,
+            save_previews_for_rejected=calibrator.save_previews_for_rejected,
+            fov_radius_frac=calibrator.fov_radius_frac,
+            max_accepted_samples=calibrator.max_accepted_samples,
+        )
+
+
 class Calibrator:
     """Incremental sample collection + OCamCalib solve over accepted samples."""
 
-    def __init__(
-        self,
-        board: LedGridBoard,
-        taylor_order: int = 4,
-        preview_dir: Optional[str] = None,
-        sample_threshold: float = coverage.DEFAULT_SAMPLE_THRESHOLD,
-        param_ranges=coverage.DEFAULT_PARAM_RANGES,
-        min_db_size: int = coverage.DEFAULT_MIN_DB_SIZE,
-        save_previews_for_rejected: bool = True,
-    ):
+    def __init__(self, board: LedGridBoard, config: Optional[CalibratorConfig] = None):
+        config = config or CalibratorConfig()
         self.board = board
-        self.taylor_order = int(taylor_order)
-        self.preview_dir = Path(preview_dir) if preview_dir else None
+        self.taylor_order = int(config.taylor_order)
+        if self.taylor_order < 4:
+            # ocam_model.omni_find_parameters_fun hardcodes min_order=4; a
+            # lower value here doesn't error there, it silently produces a
+            # truncated ss polynomial with degraded accuracy. Enforced once,
+            # here, since this is the shared construction point for the CLI,
+            # live node, and GUI (whose Spinbox(from_=4) already prevents
+            # this in practice, but shouldn't be the only thing that does).
+            raise ValueError(
+                f"taylor_order must be >= 4 (got {self.taylor_order}); "
+                "the solver's omni_find_parameters_fun hardcodes a minimum order of 4."
+            )
+        self.preview_dir = Path(config.preview_dir) if config.preview_dir else None
         # Batch mode keeps the historical behavior (a preview file for every
         # *detected* image, accepted or not). The live node sets this False so
         # a camera stream full of rejected near-duplicates doesn't flood the
         # preview directory with files.
-        self.save_previews_for_rejected = bool(save_previews_for_rejected)
-        self.sample_threshold = float(sample_threshold)
-        self.param_ranges = tuple(param_ranges)
-        self.min_db_size = int(min_db_size)
+        self.save_previews_for_rejected = bool(config.save_previews_for_rejected)
+        self.sample_threshold = float(config.sample_threshold)
+        self.param_ranges = tuple(config.param_ranges)
+        self.min_db_size = int(config.min_db_size)
+        self.fov_radius_frac = (
+            float(config.fov_radius_frac) if config.fov_radius_frac is not None else None
+        )
+        self.max_accepted_samples = (
+            int(config.max_accepted_samples) if config.max_accepted_samples is not None else None
+        )
 
         self.db: List[Sample] = []
         self.goodenough = False
@@ -116,6 +186,15 @@ class Calibrator:
 
     def db_params(self) -> List[List[float]]:
         return [s.params for s in self.db]
+
+    def valid_region_px(self) -> Optional[Tuple[float, float, float]]:
+        """(cx, cy, radius) in pixels, or None for the full rectangular frame."""
+        if self.fov_radius_frac is None or self.image_size is None:
+            return None
+        width, height = self.image_size
+        cx, cy = width / 2.0, height / 2.0
+        radius = self.fov_radius_frac * min(width, height) / 2.0
+        return (cx, cy, radius)
 
     def handle_frame(self, image: np.ndarray, image_path: str = "") -> FrameResult:
         """
@@ -149,7 +228,9 @@ class Calibrator:
                 reason=f"{name}: no markers detected",
             )
 
-        params = coverage.get_parameters(corners, self.board, self.image_size)
+        params = coverage.get_parameters(
+            corners, self.board, self.image_size, valid_region=self.valid_region_px()
+        )
 
         if not coverage.is_good_sample(params, self.db_params(), self.sample_threshold):
             if self.preview_dir is not None and self.save_previews_for_rejected:
@@ -167,6 +248,19 @@ class Calibrator:
                     f"{name}: rejected -- too similar to sample {nearest} "
                     f"({Path(self.db[nearest - 1].image_path).name}, "
                     f"distance {min(distances):.3f} <= {self.sample_threshold})"
+                ),
+            )
+
+        if self.max_accepted_samples is not None and len(self.db) >= self.max_accepted_samples:
+            return self._result(
+                image_path,
+                detected=True,
+                accepted=False,
+                params=params,
+                corners=corners,
+                reason=(
+                    f"{name}: rejected -- accepted-sample cap reached "
+                    f"({self.max_accepted_samples}); not retaining more images"
                 ),
             )
 
@@ -228,7 +322,7 @@ class Calibrator:
     # Calibration over the accepted db
     # ------------------------------------------------------------------
 
-    def _assemble(self):
+    def assemble(self):
         """Assemble solver arrays from the accepted samples only."""
         n = len(self.db)
         n_points = self.board.n_points
@@ -263,8 +357,16 @@ class Calibrator:
             raise RuntimeError("Image size unknown; no frames were processed.")
 
         width, height = self.image_size
-        Xp_abs, Yp_abs, ima_proc = self._assemble()
+        Xp_abs, Yp_abs, ima_proc = self.assemble()
 
+        # xc paired with height and yc with width looks backwards at a glance
+        # (naive expectation: xc/width, yc/height) but is correct -- verified
+        # by tracing the pairing through calibrate(), omni_find_parameters_fun,
+        # and reprojectpoints, which all consistently treat "xc"/"X" as the
+        # row axis. This matches assemble(): Xp_abs = corners[:, 0] is row
+        # data (ranges over height), Yp_abs = corners[:, 1] is col data
+        # (ranges over width). Do not "fix" this to xc=width/2.0 -- that
+        # would silently break calibration, not correct it.
         model = OCamModel(
             xc=height / 2.0,
             yc=width / 2.0,
@@ -283,6 +385,10 @@ class Calibrator:
         if np.isscalar(RRfin) or np.size(RRfin) == 1:
             raise RuntimeError("Calibration failed while computing extrinsics.")
 
+        # model is owned exclusively by this method from here on: every
+        # field is assigned here, at an explicit point, never mutated
+        # inside a helper -- findcenter/findcenter_fast return
+        # (xc, yc, ss, RRfin) instead of mutating the model they're given.
         model.ss = np.asarray(ss, dtype=float)
         reprojectpoints(model, RRfin, ima_proc, self.Xt, self.Yt, Xp_abs, Yp_abs)
         print("ss =")
@@ -291,13 +397,13 @@ class Calibrator:
         if do_find_center:
             print("\nStep 4: Find center")
             if fast_find_center:
-                new_RRfin = findcenter_fast(
+                found = findcenter_fast(
                     model, self.Xt, self.Yt, Xp_abs, Yp_abs, self.taylor_order, ima_proc
                 )
-                if new_RRfin is not None:
-                    RRfin = new_RRfin
+                if found is not None:
+                    model.xc, model.yc, model.ss, RRfin = found
             else:
-                RRfin = findcenter(
+                model.xc, model.yc, model.ss, RRfin = findcenter(
                     model, self.Xt, self.Yt, Xp_abs, Yp_abs, self.taylor_order, ima_proc
                 )
         else:
@@ -362,6 +468,7 @@ class Calibrator:
                 self.board,
                 self.image_size,
                 label=Path(sample.image_path).name or str(i),
+                valid_region=self.valid_region_px(),
             )
             if m is not None:
                 metrics.append(m)
@@ -385,7 +492,7 @@ class Calibrator:
             print("\nNo calibration data available. You must first calibrate your camera.\n")
             return
 
-        Xp_abs, Yp_abs, ima_proc = self._assemble()
+        Xp_abs, Yp_abs, ima_proc = self.assemble()
         saving_calib(
             self.last_ocam_model,
             self.RRfin,

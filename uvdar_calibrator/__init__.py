@@ -7,11 +7,12 @@ faithful port of Scaramuzza's OCamCalib (ctu-mrs/OCamCalib_UVDAR fork).
 """
 
 from .engine.board import LedGridBoard
-from .engine.calibrator import Calibrator, FrameResult, Sample
+from .engine.calibrator import Calibrator, CalibratorConfig, FrameResult, Sample
 from .engine.ocam_model import OCamModel
 
 __all__ = [
     "Calibrator",
+    "CalibratorConfig",
     "FrameResult",
     "LedGridBoard",
     "OCamModel",

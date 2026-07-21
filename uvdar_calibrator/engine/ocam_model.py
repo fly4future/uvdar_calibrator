@@ -10,23 +10,26 @@ knowledge of why those particular corners were chosen.
 
 Conventions (load-bearing -- do not "fix"):
 
-- ``ima_proc`` holds MATLAB-style **1-based** image numbers; ``_idx()``
+- ``ima_proc`` holds MATLAB-style **1-based** image numbers; ``idx()``
   converts to a 0-based Python/numpy index wherever an array is touched.
 - Detected marker points are stored ``[row, col]`` (``Xp_abs`` = row,
   ``Yp_abs`` = col) -- the reverse of OpenCV's usual ``[x, y]``.
 - Board points ``Xt``/``Yt`` are generated x-major, y-minor (outer loop
   over x, inner loop over y).
+- No module-level matplotlib import: ``plot_RR``'s optional diagnostic
+  plot (dead in this codebase -- the sole caller always passes
+  ``figure_number=0``) imports matplotlib lazily so this module has no
+  hard plotting dependency, matching "pure math" above.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import math
 from pathlib import Path
 import shutil
 from typing import Optional, Sequence, Tuple
 
-import matplotlib.pyplot as plt
 import numpy as np
 
 try:
@@ -52,7 +55,7 @@ class OCamModel:
     invpol: Optional[np.ndarray] = None
 
 
-def _idx(i: int) -> int:
+def idx(i: int) -> int:
     """Convert MATLAB-style 1-based image number to Python index."""
     return int(i) - 1
 
@@ -64,6 +67,55 @@ def _as_col(v: np.ndarray) -> np.ndarray:
 # -----------------------------------------------------------------------------
 # Projection functions
 # -----------------------------------------------------------------------------
+
+def _solve_poly_root_per_sample(
+    poly_coef: np.ndarray,
+    m: np.ndarray,
+    max_real_root: Optional[float] = None,
+    pick_min_on_multiple: bool = False,
+) -> np.ndarray:
+    """
+    Shared root-finding core for omni3d2pixel and invFUN.
+
+    For each sample ``m[j]``, shifts ``poly_coef``'s second-to-last
+    coefficient by ``m[j]`` and solves for real, positive roots via
+    ``np.roots``. Returns NaN for a sample with no unique accepted root
+    (checked via ``np.isfinite``/``np.isnan`` by every caller, so NaN is
+    the correct "unresolved" sentinel regardless of caller).
+
+    omni3d2pixel and invFUN genuinely disagree on two points, verified
+    against synthetic test data (single-root, multi-root, and
+    radius-bounded cases) before this was extracted, so both are explicit
+    parameters rather than a shared default -- unifying them silently
+    would be a behavior change, not a refactor:
+
+    - invFUN additionally bounds accepted roots to ``(0, max_real_root)``;
+      omni3d2pixel has no such bound (``max_real_root=None``).
+    - When multiple valid roots exist for a sample, omni3d2pixel picks
+      the smallest (``pick_min_on_multiple=True``); invFUN leaves that
+      sample unresolved instead of guessing (``pick_min_on_multiple=False``).
+    """
+    result = np.full_like(m, np.nan, dtype=float)
+
+    for j, mj in enumerate(m):
+        poly_tmp = poly_coef.copy()
+        poly_tmp[-2] = poly_coef[-2] - mj
+
+        roots = np.roots(poly_tmp)
+
+        mask = (np.abs(np.imag(roots)) < 1e-9) & (np.real(roots) > 0)
+        if max_real_root is not None:
+            mask &= np.real(roots) < max_real_root
+
+        real_pos = np.real(roots[mask])
+
+        if real_pos.size == 1:
+            result[j] = real_pos[0]
+        elif real_pos.size > 1 and pick_min_on_multiple:
+            result[j] = np.min(real_pos)
+
+    return result
+
 
 def omni3d2pixel(
     ss: Sequence[float],
@@ -85,24 +137,7 @@ def omni3d2pixel(
 
     poly_coef = ss[::-1].copy()
 
-    rho = np.full_like(m, np.nan, dtype=float)
-
-    for j, mj in enumerate(m):
-        poly_tmp = poly_coef.copy()
-        poly_tmp[-2] = poly_coef[-2] - mj
-
-        roots = np.roots(poly_tmp)
-
-        real_pos = roots[
-            (np.abs(np.imag(roots)) < 1e-9)
-            & (np.real(roots) > 0)
-        ]
-        real_pos = np.real(real_pos)
-
-        if real_pos.size == 1:
-            rho[j] = real_pos[0]
-        elif real_pos.size > 1:
-            rho[j] = np.min(real_pos)
+    rho = _solve_poly_root_per_sample(poly_coef, m, pick_min_on_multiple=True)
 
     x = xx[0, :] / denom * rho
     y = xx[1, :] / denom * rho
@@ -297,6 +332,15 @@ def plot_RR(
     Ypt: np.ndarray,
     figure_number: int = 0,
 ) -> int:
+    """
+    Select the correct candidate solution among RR[:, :, i] and return its
+    index. Despite the name, this is solver math (a least-squares solve
+    per candidate, picking the one with a consistent sign), not a plotting
+    function -- plotting is an optional diagnostic side effect, only run
+    when figure_number > 0 (matplotlib is imported lazily below so this
+    module has no hard plotting dependency for the always-used, math-only
+    path; the sole caller in this codebase always passes figure_number=0).
+    """
     selected = 0
 
     for i in range(RR.shape[2]):
@@ -335,6 +379,8 @@ def plot_RR(
         ss = s[:3].ravel()
 
         if figure_number > 0:
+            import matplotlib.pyplot as plt
+
             x = np.arange(0, 621)
             plt.figure(figure_number)
             plt.subplot(1, RR.shape[2], i + 1)
@@ -369,7 +415,7 @@ def calibrate(
     RRfin = np.zeros((3, 3, n_ima), dtype=float)
 
     for kk in ima_proc:
-        k = _idx(kk)
+        k = idx(kk)
 
         Ypt = _as_col(Yp[:, 0, k])
         Xpt = _as_col(Xp[:, 0, k])
@@ -521,7 +567,7 @@ def omni_find_parameters_fun(
 
         for i in ima_proc:
             count += 1
-            k = _idx(i)
+            k = idx(i)
 
             RRdef = RRfin[:, :, k]
 
@@ -592,7 +638,7 @@ def omni_find_parameters_fun(
 
     for j in ima_proc:
         count += 1
-        k = _idx(j)
+        k = idx(j)
 
         RRfin[2, 2, k] = s[len(ss_raw) + count - 1]
 
@@ -619,7 +665,7 @@ def reprojectpoints(
     MSE = 0.0
 
     for i in ima_proc:
-        k = _idx(i)
+        k = idx(i)
 
         xx = RRfin[:, :, k] @ np.vstack(
             [
@@ -665,7 +711,24 @@ def reprojectpoints(
     print(f"\nSum of squared errors\n\n {MSE:f}")
 
     if avg < 1.0:
-        print("\nAverage error is below 1 pixel: OK.\n")
+        if len(ima_proc) < 5:
+            # Reprojection error measures fit-to-training-data, not
+            # generalization -- a calibration from a handful of samples can
+            # look identical (low pixel error, "OK" wording) to a genuinely
+            # good one while actually being overfit. This module has no
+            # knowledge of "goodness"/sample diversity (see module
+            # docstring), so len(ima_proc) is the only diversity proxy
+            # available here; it's a floor, not a substitute for
+            # coverage.compute_goodenough's real range-based check.
+            print(
+                f"\nAverage error is below 1 pixel, but this fit used only "
+                f"{len(ima_proc)} sample(s) -- low reprojection error from a "
+                "small sample set does not mean the calibration will "
+                "generalize; it may simply be overfit. Capture more, more "
+                "varied views before trusting this result.\n"
+            )
+        else:
+            print("\nAverage error is below 1 pixel: OK.\n")
     else:
         print("\nWARNING: average error is above 1 pixel. Check marker extraction/calibration.\n")
 
@@ -691,7 +754,7 @@ def reprojectPoints_fun(
     Yt = _as_col(Yt)
 
     for i in ima_proc:
-        k = _idx(i)
+        k = idx(i)
 
         xx = RRfin[:, :, k] @ np.vstack(
             [
@@ -737,7 +800,7 @@ def reprojectpoints_adv(
     MSE = 0.0
 
     for i in ima_proc:
-        k = _idx(i)
+        k = idx(i)
 
         Mc = RRfin[:, :, k] @ M.T
 
@@ -772,16 +835,19 @@ def findcenter(
     Yp_abs: np.ndarray,
     taylor_order: int,
     ima_proc: Sequence[int],
-) -> np.ndarray:
+) -> Tuple[float, float, np.ndarray, np.ndarray]:
     """
     Original MATLAB-style exhaustive center search.
 
-    Mutates ``ocam_model`` (xc, yc, ss) and returns the recalibrated RRfin.
+    Does NOT mutate ``ocam_model`` -- returns ``(xc, yc, ss, RRfin)`` for
+    the caller to commit (see findcenter_fast's docstring for why).
     """
     print("\nComputing center coordinates.\n")
 
     pxc = ocam_model.xc
     pyc = ocam_model.yc
+    cur_xc = pxc
+    cur_yc = pyc
 
     width = ocam_model.width
     height = ocam_model.height
@@ -846,17 +912,17 @@ def findcenter(
 
         ind = np.unravel_index(np.argmin(MSEA), MSEA.shape)
 
-        ocam_model.xc = float(xreg[ind])
-        ocam_model.yc = float(yreg[ind])
+        cur_xc = float(xreg[ind])
+        cur_yc = float(yreg[ind])
 
         dx_reg = abs((xregstop - xregstart) / xceil)
         dy_reg = abs((yregstop - yregstart) / yceil)
 
-        xregstart = ocam_model.xc - dx_reg
-        xregstop = ocam_model.xc + dx_reg
+        xregstart = cur_xc - dx_reg
+        xregstop = cur_xc + dx_reg
 
-        yregstart = ocam_model.yc - dy_reg
-        yregstop = ocam_model.yc + dy_reg
+        yregstart = cur_yc - dy_reg
+        yregstop = cur_yc + dy_reg
 
         print(f"{glc}...", end="", flush=True)
 
@@ -867,20 +933,25 @@ def findcenter(
         Yt,
         Xp_abs,
         Yp_abs,
-        ocam_model.xc,
-        ocam_model.yc,
+        cur_xc,
+        cur_yc,
         taylor_order,
         ima_proc,
     )
 
-    ocam_model.ss = np.asarray(ss, dtype=float)
+    ss = np.asarray(ss, dtype=float)
 
-    reprojectpoints(ocam_model, RRfin, ima_proc, Xt, Yt, Xp_abs, Yp_abs)
+    # Diagnostic-only print; see findcenter_fast's docstring for why this
+    # uses a throwaway copy instead of mutating ocam_model.
+    reprojectpoints(
+        replace(ocam_model, xc=cur_xc, yc=cur_yc, ss=ss),
+        RRfin, ima_proc, Xt, Yt, Xp_abs, Yp_abs,
+    )
 
-    print("xc =", ocam_model.xc)
-    print("yc =", ocam_model.yc)
+    print("xc =", cur_xc)
+    print("yc =", cur_yc)
 
-    return RRfin
+    return cur_xc, cur_yc, ss, RRfin
 
 
 def findcenter_fast(
@@ -894,7 +965,7 @@ def findcenter_fast(
     iterations: int = 4,
     grid_size: int = 3,
     start_radius_fraction: float = 0.20,
-) -> Optional[np.ndarray]:
+) -> Optional[Tuple[float, float, np.ndarray, np.ndarray]]:
     """
     Faster center search.
 
@@ -902,9 +973,12 @@ def findcenter_fast(
     recalibrates many times. This fast version searches a smaller grid and
     shrinks the search radius after each pass.
 
-    Mutates ``ocam_model`` (xc, yc, ss) and returns the recalibrated RRfin,
-    or None when the search fails (the caller should keep the previous
-    center/extrinsics in that case).
+    Does NOT mutate ``ocam_model`` -- returns ``(xc, yc, ss, RRfin)`` for
+    the caller to commit, or None when the search fails (the caller should
+    keep the previous center/extrinsics in that case). Committing model
+    state is the caller's (Calibrator.cal_fromcorners') responsibility
+    alone, so there's one place that owns "what is the model's state right
+    now", not a mutation hidden inside this search.
     """
     print("\nComputing center coordinates using FAST search.\n")
 
@@ -982,17 +1056,21 @@ def findcenter_fast(
         print("Fast center search failed. Keeping previous center.")
         return None
 
-    ocam_model.xc = best_xc
-    ocam_model.yc = best_yc
-    ocam_model.ss = np.asarray(best_ss, dtype=float)
+    best_ss = np.asarray(best_ss, dtype=float)
 
     print("\nFast center search complete.")
-    print("xc =", ocam_model.xc)
-    print("yc =", ocam_model.yc)
+    print("xc =", best_xc)
+    print("yc =", best_yc)
 
-    reprojectpoints(ocam_model, best_RRfin, ima_proc, Xt, Yt, Xp_abs, Yp_abs)
+    # Diagnostic-only print of reprojection error for the just-found best
+    # center; uses a throwaway copy so this function never mutates the
+    # caller's model (see docstring).
+    reprojectpoints(
+        replace(ocam_model, xc=best_xc, yc=best_yc, ss=best_ss),
+        best_RRfin, ima_proc, Xt, Yt, Xp_abs, Yp_abs,
+    )
 
-    return best_RRfin
+    return best_xc, best_yc, best_ss, best_RRfin
 
 
 def recomp_corner_calib(
@@ -1044,7 +1122,7 @@ def recomp_corner_calib(
     kept_total = 0
 
     for kk in ima_proc:
-        k = _idx(kk)
+        k = idx(kk)
         I = images[k].astype(np.uint8)  # noqa: E741 -- MATLAB port keeps upstream's name
 
         # OpenCV cornerSubPix expects points as [col, row]. Existing data stores
@@ -1132,26 +1210,11 @@ def invFUN(
     ss = np.asarray(ss, dtype=float).ravel()
     poly_coef = ss[::-1].copy()
 
-    r = np.full_like(m, np.inf, dtype=float)
-
-    for j, mj in enumerate(m):
-        poly_tmp = poly_coef.copy()
-        poly_tmp[-2] = poly_coef[-2] - mj
-
-        roots = np.roots(poly_tmp)
-
-        res = np.real(
-            roots[
-                (np.abs(np.imag(roots)) < 1e-9)
-                & (np.real(roots) > 0)
-                & (np.real(roots) < radius)
-            ]
-        )
-
-        if res.size == 1:
-            r[j] = res[0]
-
-    return r
+    # Sole caller (findinvpoly2) filters with np.isfinite, which excludes
+    # NaN exactly the same way it excluded the old Inf sentinel -- pick_min
+    # stays False, preserving "leave ambiguous multi-root samples
+    # unresolved" (unlike omni3d2pixel, which picks the smallest root).
+    return _solve_poly_root_per_sample(poly_coef, m, max_real_root=radius)
 
 
 def findinvpoly2(

@@ -81,8 +81,9 @@ smaller/farther-captured UV grid — see the note at their definition.
 ### The solver (`engine/ocam_model.py`)
 
 Pure math over `(Xt, Yt, Xp_abs, Yp_abs, xc, yc, ...)` arrays — no knowledge of samples,
-goodness, or GUI state. `ima_proc` holds **1-based** (MATLAB-style) image numbers and `_idx()`
-converts to 0-based numpy indices wherever an array is touched. Keep this convention when
+goodness, or GUI state. `ima_proc` holds **1-based** (MATLAB-style) image numbers and `idx()`
+converts to 0-based numpy indices wherever an array is touched; it's public (not `_idx`)
+specifically because `diagnostics/plots.py` needs the same conversion. Keep this convention when
 adding code that walks `ima_proc` — mixing 0- and 1-based indices here is the easiest way to
 silently corrupt results. `taylor_order` default is 4; `min_order` is hardcoded to 4 in
 `omni_find_parameters_fun`.
@@ -140,3 +141,9 @@ when not ready); SAVE/EXPORT by `calibrated`.
   for this x-major flat layout (`idx(x, y) = x * n_rows + y`).
 - `n_sq_x`/`n_sq_y` are square counts; the actual point grid is `(n_sq_x+1) x (n_sq_y+1)`
   (`LedGridBoard.n_cols`/`n_rows`).
+- Following from the `[row, col]` point convention above, `OCamModel.xc`/`.ss` "X" throughout
+  the solver (`calibrate`, `omni_find_parameters_fun`, `reprojectpoints`, `omni3d2pixel`) means
+  the **row** axis, and `.yc` means the **col** axis — the reverse of the naive width/height
+  pairing. `Calibrator.cal_fromcorners`'s initial guess is correctly `xc=height/2.0,
+  yc=width/2.0`, not the other way around; this has been verified by tracing the pairing through
+  every solver function that reads it.
