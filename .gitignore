@@ -1,2 +1,8 @@
 __pycache__/
 *.pyc
+.serena/
+calibrator/
+.claude-flow/
+.superpowers/
+detected_marker_previews/
+doc/superpowers/
