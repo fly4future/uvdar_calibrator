@@ -75,7 +75,47 @@ def test_db_metrics_tracks_accepted_samples():
     print("ok: db_metrics tracks accepted samples")
 
 
+def test_goodenough_requires_both_count_and_range():
+    ranges = (0.6, 0.6, 0.3, 0.45)
+
+    # Full range coverage, but only 3 samples -> not ready.
+    few = [[0.0, 0.0, 0.0, 0.0], [0.9, 0.9, 0.5, 0.6], [0.4, 0.4, 0.25, 0.3]]
+    good, progress = coverage.compute_goodenough(few, ranges, min_db_size=20)
+    assert all(row[3] >= 1.0 for row in progress), "expected full range"
+    assert not good, "3 samples with full range must not be ready"
+
+    # Many samples, but all identical -> no range -> not ready.
+    many = [[0.5, 0.5, 0.2, 0.1]] * 40
+    good, progress = coverage.compute_goodenough(many, ranges, min_db_size=20)
+    assert not good, "40 identical samples must not be ready"
+
+    # Both satisfied -> ready.
+    both = few * 7  # 21 samples spanning the same full range
+    good, _ = coverage.compute_goodenough(both, ranges, min_db_size=20)
+    assert good, "21 samples with full range must be ready"
+    print("ok: goodenough requires both sample count and range coverage")
+
+
+def test_bins_do_not_gate_readiness():
+    ranges = (0.6, 0.6, 0.3, 0.45)
+    db = [[0.0, 0.0, 0.0, 0.0], [0.9, 0.9, 0.5, 0.6], [0.4, 0.4, 0.25, 0.3]] * 7
+
+    plain, _ = coverage.compute_goodenough(db, ranges, min_db_size=20)
+    # An empty metrics list means every spatial bin is missing. If bins gated,
+    # this would flip the answer.
+    binned, _, report = coverage.compute_goodenough_with_bins(
+        db, [], ranges, min_db_size=20,
+    )
+    assert plain == binned, (
+        f"bin report changed readiness: {plain} -> {binned}; bins must be hints only"
+    )
+    assert report["missing"]["quadrants"], "expected missing bins in this fixture"
+    print("ok: bin report does not gate readiness")
+
+
 if __name__ == "__main__":
     test_cached_metric_matches_fresh_computation()
     test_db_metrics_tracks_accepted_samples()
+    test_goodenough_requires_both_count_and_range()
+    test_bins_do_not_gate_readiness()
     print("all checks passed")

@@ -65,18 +65,21 @@ The direct analogue of ROS's `MonoCalibrator`. One photo == one "frame":
   intentional behavior**, not a bug — it is what produces a diverse calibration set, and the
   accepted count for a folder is typically lower than the number of detectable images.
 - Readiness (`goodenough`) comes from `coverage.compute_goodenough`: per-axis progress is the
-  min/max range of accepted samples' params against `param_ranges`, complete when every axis
-  reaches 1.0 or the db reaches `min_db_size`. This — not the bin report — gates readiness.
+  min/max range of accepted samples' params against `param_ranges`. Ready requires **both**
+  every axis at 1.0 **and** at least `min_db_size` accepted samples — an AND, unlike ROS's
+  OR, because a live stream trivially supplies many near-identical frames and sample count
+  alone is not evidence of variety. This — not the bin report — gates readiness.
 - `cal_fromcorners()` assembles `Xt/Yt/Xp_abs/Yp_abs` from the accepted `db` only and runs the
   OCamCalib solve: initial `calibrate()` → `findcenter_fast()` (or slow `findcenter`) →
   optional `recomp_corner_calib` → final `calibrate()` + `reprojectpoints()`.
 - `save()`/`export_txt()` write `Omni_Calib_Results.npz` (+ optional `.mat`) and
   `calib_results.txt` (OCamCalib text format, computing `invpol` via `findinvpoly`).
 
-The tuning constants in `engine/coverage.py` (`DEFAULT_SAMPLE_THRESHOLD = 0.2`,
-`DEFAULT_PARAM_RANGES = (0.7, 0.7, 0.4, 0.5)`, `DEFAULT_MIN_DB_SIZE = 40`) are ROS
-camera_calibration defaults carried over unchanged; they likely need retuning for this
-smaller/farther-captured UV grid — see the note at their definition.
+The tuning constants in `engine/coverage.py` (`DEFAULT_SAMPLE_THRESHOLD = 0.15`,
+`DEFAULT_PARAM_RANGES = (0.6, 0.6, 0.3, 0.45)`, `DEFAULT_MIN_DB_SIZE = 20`) started as ROS
+camera_calibration defaults but have been retuned for this smaller/farther-captured UV grid —
+see the note at their definition. They are overridable per-run through `CalibratorConfig` and
+the GUI's Advanced Settings dialog.
 
 ### The solver (`engine/ocam_model.py`)
 

@@ -43,7 +43,7 @@ from .board import LedGridBoard
 # whose reachable board positions are narrower than the sensor rectangle.
 DEFAULT_SAMPLE_THRESHOLD = 0.15               # is_good_sample min L1 param distance
 DEFAULT_PARAM_RANGES = (0.6, 0.6, 0.3, 0.45)  # compute_goodenough targets (X, Y, Size, Skew)
-DEFAULT_MIN_DB_SIZE = 40                      # db size forcing goodenough regardless of ranges
+DEFAULT_MIN_DB_SIZE = 20                      # readiness floor, ANDed with full range progress
 
 # Minimum margin by which a candidate must exceed the current accepted
 # min/max on an axis to count as a genuine range extension in
@@ -238,9 +238,8 @@ def compute_goodenough(
 
     Returns ``(goodenough, [(name, lo, hi, progress), ...])`` where progress
     per axis is ``min((hi - lo) / target_range, 1.0)``. "Good enough" means
-    progress is 1.0 on every axis, or the database has grown large
-    regardless (``>= min_db_size`` samples). Returns ``(False, [])`` for an
-    empty database.
+    progress is 1.0 on every axis *and* the database holds at least
+    ``min_db_size`` samples. Returns ``(False, [])`` for an empty database.
     """
     if not db_params:
         return False, []
@@ -260,7 +259,11 @@ def compute_goodenough(
         for (lo, hi, r) in zip(min_params, max_params, param_ranges)
     ]
 
-    goodenough = (len(all_params) >= min_db_size) or all(p == 1.0 for p in progress)
+    # AND, not ROS's OR. A large db is not evidence of variety -- a live
+    # stream trivially supplies 40 near-identical frames -- and full range
+    # coverage from a handful of samples is too thin for the Taylor solve.
+    # Both must hold.
+    goodenough = len(all_params) >= min_db_size and all(p >= 1.0 for p in progress)
 
     return goodenough, list(zip(PARAM_NAMES, min_params, max_params, progress))
 
@@ -272,17 +275,13 @@ def compute_goodenough_with_bins(
     min_db_size: int = DEFAULT_MIN_DB_SIZE,
 ) -> Tuple[bool, List[Tuple[str, float, float, float]], dict]:
     """
-    Judge calibration readiness using both numeric range progress and spatial bins.
+    Judge calibration readiness and return the spatial-bin hint report alongside it.
 
-    READY requires:
-
-    1. X/Y/Size/Skew range progress all reach 100%.
-    2. Accepted samples cover left, center, and right.
-    3. Accepted samples cover top, middle, and bottom.
-    4. Accepted samples cover all four quadrants: LT, RT, LB, RB.
-
-    This makes the GUI readiness state match the board-position coverage graph
-    much better than range progress alone.
+    Readiness is decided solely by compute_goodenough (sample count AND
+    per-axis range progress). The bin report is returned alongside it as a
+    *hint* -- it drives the "next images to capture" guidance and the
+    coverage-graph marker, and must never gate the CALIBRATE button or the
+    CLI.
     """
     range_good, progress = compute_goodenough(
         db_params,
@@ -309,22 +308,9 @@ def compute_goodenough_with_bins(
                 "quadrants": set(),
             },
         }
-        return False, progress, empty_report
+        return range_good, progress, empty_report
 
-    report = compute_bin_coverage(list(metrics))
-    missing = report["missing"]
-
-    spatial_good = (
-        not missing["x"]
-        and not missing["y"]
-        and not missing["quadrants"]
-    )
-
-    # Size and tilt bins are useful suggestions, but Size and Skew are already
-    # required through the numeric progress bars. Do not double-gate them here.
-    goodenough = range_good and spatial_good
-
-    return goodenough, progress, report
+    return range_good, progress, compute_bin_coverage(list(metrics))
 
 
 def format_progress(
