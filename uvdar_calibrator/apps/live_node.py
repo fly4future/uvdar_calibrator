@@ -57,6 +57,7 @@ import cv_bridge
 import numpy as np
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data
 import sensor_msgs.msg
 
 from .gui import launch_live_gui
@@ -177,13 +178,11 @@ class CalibrationSubscriberNode(Node):
         raw_queue: Queue,
         preview_queue: Queue,
         image_topic: str = "image",
-        queue_size: int = 10,
         max_dimension: Optional[int] = None,
     ):
         super().__init__("uvdar_cameracalibrator")
         self.raw_queue = raw_queue
         self.preview_queue = preview_queue
-        self.queue_size = int(queue_size)
         self.max_dimension = int(max_dimension) if max_dimension else None
         self.bridge = cv_bridge.CvBridge()
         self._sub = None
@@ -193,8 +192,12 @@ class CalibrationSubscriberNode(Node):
         """(Re)subscribe to ``image_topic``; returns the resolved topic name."""
         if self._sub is not None:
             self.destroy_subscription(self._sub)
+        # Sensor-data QoS (BEST_EFFORT) matches both BEST_EFFORT and RELIABLE
+        # publishers. A plain depth int means RELIABLE, which silently fails to
+        # match the BEST_EFFORT drivers most cameras use -- no frames, no error.
         self._sub = self.create_subscription(
-            sensor_msgs.msg.Image, image_topic, self._on_image, self.queue_size
+            sensor_msgs.msg.Image, image_topic, self._on_image,
+            qos_profile_sensor_data,
         )
         self.get_logger().info(f"Subscribed to {self._sub.topic_name}")
         return self._sub.topic_name
