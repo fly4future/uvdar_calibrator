@@ -60,6 +60,7 @@ from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 import sensor_msgs.msg
 
+from .cli import add_sample_selection_args, sample_selection_config_kwargs
 from .gui import launch_live_gui
 from ..engine.board import LedGridBoard
 from ..engine.calibrator import Calibrator, CalibratorConfig
@@ -336,6 +337,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
                        "and sample browsing) would otherwise grow unbounded over a "
                        f"long-running capture. Default: {DEFAULT_MAX_ACCEPTED_SAMPLES}."
                    ))
+    add_sample_selection_args(p)
     return p
 
 
@@ -358,6 +360,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         save_previews_for_rejected=False,
         fov_radius_frac=args.fov_radius_frac,
         max_accepted_samples=args.max_accepted_samples,
+        **sample_selection_config_kwargs(args),
     )
     calibrator = Calibrator(board, config)
 

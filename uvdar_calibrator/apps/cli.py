@@ -16,9 +16,68 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Optional, Sequence
 
+from ..engine import coverage
 from ..engine.board import LedGridBoard
 from ..engine.calibrator import Calibrator, CalibratorConfig
 from ..engine.detection import find_image_files, read_image_gray
+
+
+def add_sample_selection_args(p: argparse.ArgumentParser) -> None:
+    """
+    Add the sample-selection / readiness knobs shared by the CLI and the ROS node.
+
+    These defaults were tuned against one 23-image capture set, and two of
+    them are rig-dependent: the Size target is a claim about what your lens,
+    board size and available floor space can physically reach. Defined here
+    rather than duplicated in live_node so the two entry points cannot drift.
+    """
+    p.add_argument(
+        "--sample_threshold",
+        type=float,
+        default=coverage.DEFAULT_SAMPLE_THRESHOLD,
+        help=(
+            "Minimum L1 distance in [x, y, size, skew] space between a candidate "
+            "and every already-accepted sample. Lower accepts more, more similar "
+            f"images. Default: {coverage.DEFAULT_SAMPLE_THRESHOLD}."
+        ),
+    )
+
+    p.add_argument(
+        "--param_ranges",
+        type=float,
+        nargs=4,
+        metavar=("X", "Y", "SIZE", "SKEW"),
+        default=None,
+        help=(
+            "Per-axis span an accepted-sample set must cover for each readiness "
+            "bar to reach 100%%. SIZE especially is rig-dependent -- if your lens "
+            "and board cannot vary apparent size that much, lower it rather than "
+            "overriding the readiness gate. Default: "
+            f"{' '.join(str(v) for v in coverage.DEFAULT_PARAM_RANGES)}."
+        ),
+    )
+
+    p.add_argument(
+        "--min_db_size",
+        type=int,
+        default=coverage.DEFAULT_MIN_DB_SIZE,
+        help=(
+            "Minimum accepted samples before calibration is considered ready. "
+            "ANDed with full per-axis range progress, so both must hold. "
+            f"Default: {coverage.DEFAULT_MIN_DB_SIZE}."
+        ),
+    )
+
+
+def sample_selection_config_kwargs(args: argparse.Namespace) -> dict:
+    """Turn the shared sample-selection flags into CalibratorConfig kwargs."""
+    kwargs = {
+        "sample_threshold": args.sample_threshold,
+        "min_db_size": args.min_db_size,
+    }
+    if args.param_ranges is not None:
+        kwargs["param_ranges"] = tuple(args.param_ranges)
+    return kwargs
 
 
 def _build_arg_parser() -> argparse.ArgumentParser:
@@ -138,6 +197,8 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Launch the interactive Tkinter calibration GUI.",
     )
+
+    add_sample_selection_args(p)
 
     return p
 
@@ -282,6 +343,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     config = CalibratorConfig(
         taylor_order=args.taylor_order,
         fov_radius_frac=args.fov_radius_frac,
+        **sample_selection_config_kwargs(args),
     )
 
     if args.gui:
