@@ -305,7 +305,8 @@ class _BaseCalibrationApp:
 
         threshold_var = _labeled_entry(
             row, "Sample threshold:", cfg.sample_threshold,
-            "min L1 distance for a new sample to be accepted",
+            "min distance for a new sample to be accepted, in target spans "
+            "(each axis normalized by its Param range)",
         )
         row += 1
 
@@ -324,7 +325,7 @@ class _BaseCalibrationApp:
 
         min_db_var = _labeled_entry(
             row, "Min DB size:", cfg.min_db_size,
-            "accepted-sample count that forces readiness regardless of range coverage",
+            "accepted-sample count required for readiness, ANDed with full range coverage",
         )
         row += 1
 
