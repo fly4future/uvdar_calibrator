@@ -41,6 +41,7 @@ setup(
         "console_scripts": [
             "cameracalibrator = uvdar_calibrator.apps.live_node:main",
             "calibrate_offline = uvdar_calibrator.apps.cli:main",
+            "replay_images = uvdar_calibrator.apps.replay_publisher:main",
         ],
     },
 )

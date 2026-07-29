@@ -2,15 +2,19 @@
 
 A RELIABLE subscriber does not match a BEST_EFFORT publisher, and DDS reports
 that as silence rather than an error -- the GUI just shows no frames forever.
-Run: PYTHONPATH=.:$PYTHONPATH python3 test/test_live_qos.py
+Run: python3 test/test_live_qos.py
 """
 
+from pathlib import Path
 from queue import Queue
+import sys
 
-import rclpy
-from rclpy.qos import DurabilityPolicy, ReliabilityPolicy
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from uvdar_calibrator.apps.live_node import CalibrationSubscriberNode
+import rclpy  # noqa: E402
+from rclpy.qos import DurabilityPolicy, ReliabilityPolicy  # noqa: E402
+
+from uvdar_calibrator.apps.live_node import CalibrationSubscriberNode  # noqa: E402
 
 
 def test_subscription_qos_is_best_effort():
