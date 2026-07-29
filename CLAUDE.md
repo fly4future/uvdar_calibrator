@@ -34,6 +34,24 @@ python -m uvdar_calibrator --image_dir photos --coverage_only --show_coverage
 python -m uvdar_calibrator --image_dir photos --base_name example_ --extension bmp --gui
 ```
 
+Live mode without a camera — replay a photo folder onto an Image topic:
+
+```bash
+ros2 run uvdar_calibrator replay_images --image_dir example_images   # shell 1
+ros2 run uvdar_calibrator cameracalibrator image:=/image             # shell 2
+```
+
+`test/test_live_endtoend.py` drives that same pair in one process (no GUI) and asserts frames
+survive the round trip into accepted samples. Run the checks with the project venv, since the
+ROS stack is built against numpy 1.x and `cv_bridge` segfaults rather than raising under
+numpy 2:
+
+```bash
+source calibrator/bin/activate
+python test/test_coverage_rules.py && python test/test_live_qos.py \
+    && python test/test_live_endtoend.py
+```
+
 ## Architecture
 
 ```
@@ -48,10 +66,11 @@ uvdar_calibrator/
 │   └── calibrator.py         # Calibrator engine: db/goodenough/handle_frame/cal_fromcorners/export
 ├── diagnostics/
 │   └── plots.py             # matplotlib diagnostics (block on window close)
-└── apps/                   # the three ways to drive the engine
+└── apps/                   # the three ways to drive the engine (+ a test publisher)
     ├── gui.py                 # Tkinter app: feeds photos (or live frames) into Calibrator, live range bars
     ├── cli.py                  # argparse entry point (offline/batch, calibrate_offline console_script)
-    └── live_node.py            # ROS 2 node: live topic capture (cameracalibrator console_script)
+    ├── live_node.py            # ROS 2 node: live topic capture (cameracalibrator console_script)
+    └── replay_publisher.py     # ROS 2 node: replay a photo folder onto an Image topic (replay_images)
 ```
 
 ### The engine (`engine/calibrator.Calibrator`)
@@ -60,8 +79,11 @@ The direct analogue of ROS's `MonoCalibrator`. One photo == one "frame":
 
 - `handle_frame(image, path)` detects markers (`detection.get_corners`), reduces the view to
   four normalized numbers `[p_x, p_y, p_size, skew]` (`coverage.get_parameters`), and only
-  appends it to the sample database `db` if its L1 distance from *every* already-accepted
-  sample exceeds a threshold (`coverage.is_good_sample`). **Rejecting near-duplicate photos is
+  appends it to the sample database `db` if its distance from *every* already-accepted
+  sample exceeds a threshold (`coverage.is_good_sample`). That distance
+  (`coverage.param_distance`) is an L1 sum in which each axis is first divided by its
+  `param_ranges` span, so the threshold is dimensionless ("how many target-spans apart")
+  and means the same thing on every axis and every rig. **Rejecting near-duplicate photos is
   intentional behavior**, not a bug — it is what produces a diverse calibration set, and the
   accepted count for a folder is typically lower than the number of detectable images.
 - Readiness (`goodenough`) comes from `coverage.compute_goodenough`: per-axis progress is the
@@ -75,11 +97,14 @@ The direct analogue of ROS's `MonoCalibrator`. One photo == one "frame":
 - `save()`/`export_txt()` write `Omni_Calib_Results.npz` (+ optional `.mat`) and
   `calib_results.txt` (OCamCalib text format, computing `invpol` via `findinvpoly`).
 
-The tuning constants in `engine/coverage.py` (`DEFAULT_SAMPLE_THRESHOLD = 0.15`,
+The tuning constants in `engine/coverage.py` (`DEFAULT_SAMPLE_THRESHOLD = 0.30`, in units of
+target spans — not raw parameter units,
 `DEFAULT_PARAM_RANGES = (0.6, 0.6, 0.3, 0.45)`, `DEFAULT_MIN_DB_SIZE = 20`) started as ROS
 camera_calibration defaults but have been retuned for this smaller/farther-captured UV grid —
-see the note at their definition. They are overridable per-run through `CalibratorConfig` and
-the GUI's Advanced Settings dialog.
+see the note at their definition. They are overridable per-run through `CalibratorConfig`, the
+GUI's Advanced Settings dialog, and the `--sample_threshold` / `--param_ranges` /
+`--min_db_size` flags shared by the CLI and the ROS node (defined once in
+`apps/cli.add_sample_selection_args` so the two entry points cannot drift).
 
 ### The solver (`engine/ocam_model.py`)
 
