@@ -46,6 +46,11 @@ class Sample:
     image: np.ndarray              # grayscale image
     corners: np.ndarray            # (n_points, 2) [row, col], flat x-major/y-minor
     image_path: str
+    # Bin-classification metric for this view. A pure function of corners,
+    # board and image_size, none of which change after acceptance -- so it is
+    # computed once here rather than re-swept out of the whole db by every
+    # consumer that wants the bin report.
+    metric: Optional[dict] = None
 
 
 @dataclass
@@ -187,6 +192,20 @@ class Calibrator:
     def db_params(self) -> List[List[float]]:
         return [s.params for s in self.db]
 
+    def _build_metric(self, corners, image_path: str) -> Optional[dict]:
+        """Bin-classification metric for one view, or None if unclassifiable."""
+        return coverage.sample_metric(
+            corners,
+            self.board,
+            self.image_size,
+            label=Path(image_path).name or "<array>",
+            valid_region=self.valid_region_px(),
+        )
+
+    def db_metrics(self) -> List[dict]:
+        """Return cached per-sample metrics, skipping unclassifiable views."""
+        return [s.metric for s in self.db if s.metric is not None]
+
     def valid_region_px(self) -> Optional[Tuple[float, float, float]]:
         """(cx, cy, radius) in pixels, or None for the full rectangular frame."""
         if self.fov_radius_frac is None or self.image_size is None:
@@ -267,7 +286,15 @@ class Calibrator:
         if self.preview_dir is not None:
             self._save_preview(image, corners, image_path)
 
-        self.db.append(Sample(params=params, image=image, corners=corners, image_path=image_path))
+        self.db.append(
+            Sample(
+                params=params,
+                image=image,
+                corners=corners,
+                image_path=image_path,
+                metric=self._build_metric(corners, image_path),
+            )
+        )
         self.calibrated = False  # db changed; any previous solve is stale
 
         p_str = ", ".join(f"{v:.2f}" for v in params)
@@ -461,17 +488,7 @@ class Calibrator:
         )
         lines = [coverage.format_progress(progress, goodenough, len(self.db))]
 
-        metrics = []
-        for i, sample in enumerate(self.db, start=1):
-            m = coverage.sample_metric(
-                sample.corners,
-                self.board,
-                self.image_size,
-                label=Path(sample.image_path).name or str(i),
-                valid_region=self.valid_region_px(),
-            )
-            if m is not None:
-                metrics.append(m)
+        metrics = self.db_metrics()
         if metrics:
             lines.append("")
             lines.append(coverage.format_bin_coverage(coverage.compute_bin_coverage(metrics)))

@@ -215,16 +215,7 @@ def run(
     if show_coverage:
         from ..engine import coverage as _coverage
 
-        metrics = []
-        for sample in cal.db:
-            m = _coverage.sample_metric(
-                sample.corners, board, cal.image_size,
-                label=Path(sample.image_path).name,
-                valid_region=cal.valid_region_px(),
-            )
-            if m is not None:
-                metrics.append(m)
-        _coverage.plot_bin_coverage(metrics)
+        _coverage.plot_bin_coverage(cal.db_metrics())
 
     if coverage_only:
         print("\nCoverage-only mode complete. No calibration was run.")

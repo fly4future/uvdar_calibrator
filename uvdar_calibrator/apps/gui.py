@@ -114,6 +114,11 @@ class _BaseCalibrationApp:
 
         self.calibrator: Calibrator | None = None
         self.current_sample_index = 0
+        # The position guide is drawn on every rendered preview frame but only
+        # depends on the accepted-sample db, so recompute it when the db
+        # changes rather than at frame rate.
+        self._guide_cache = None
+        self._guide_db_len = -1
         self.photo_ref = None
         self._forward_view_cache = None        # (map_x, map_y) or None
         self._forward_view_model_id = None     # id(last built-from model)
@@ -450,15 +455,7 @@ class _BaseCalibrationApp:
         # samples exist (confirmation dialog in calibrate()).
         self.calibrate_button.configure(state=("normal" if n > 0 else "disabled"))
 
-        metrics = []
-        for sample in cal.db:
-            m = coverage.sample_metric(
-                sample.corners, cal.board, cal.image_size,
-                label=Path(sample.image_path).name,
-                valid_region=cal.valid_region_px(),
-            )
-            if m is not None:
-                metrics.append(m)
+        metrics = cal.db_metrics()
         if metrics:
             suggestions = coverage.coverage_suggestions(coverage.compute_bin_coverage(metrics))
             if not suggestions:
@@ -643,6 +640,15 @@ class _BaseCalibrationApp:
         self._show_current_sample()
 
     def _coverage_overlay_guide(self):
+        """Position guide, recomputed only when the accepted-sample db changes."""
+        cal = self.calibrator
+        n = len(cal.db) if cal is not None else -1
+        if n != self._guide_db_len:
+            self._guide_cache = self._compute_coverage_overlay_guide()
+            self._guide_db_len = n
+        return self._guide_cache
+
+    def _compute_coverage_overlay_guide(self):
         """
         Where to put the board next, as normalized image coordinates.
 
@@ -655,15 +661,7 @@ class _BaseCalibrationApp:
         if cal is None:
             return None
 
-        metrics = []
-        for sample in cal.db:
-            m = coverage.sample_metric(
-                sample.corners, cal.board, cal.image_size,
-                label=Path(sample.image_path).name,
-                valid_region=cal.valid_region_px(),
-            )
-            if m is not None:
-                metrics.append(m)
+        metrics = cal.db_metrics()
 
         _goodenough, progress, _report = coverage.compute_goodenough_with_bins(
             cal.db_params(), metrics, cal.param_ranges, cal.min_db_size,
