@@ -27,6 +27,7 @@ from __future__ import annotations
 from dataclasses import replace
 from pathlib import Path
 import queue
+import time
 
 import numpy as np
 
@@ -186,6 +187,10 @@ class _BaseCalibrationApp:
         nav.pack(side=tk.BOTTOM, fill=tk.X)
         ttk.Button(nav, text="Previous", command=self.prev_sample).pack(side=tk.LEFT)
         ttk.Button(nav, text="Next", command=self.next_sample).pack(side=tk.LEFT, padx=4)
+        self.delete_button = ttk.Button(
+            nav, text="Delete Sample", command=self.delete_sample
+        )
+        self.delete_button.pack(side=tk.LEFT, padx=4)
         self.forward_view_toggle = ttk.Checkbutton(
             nav,
             text="Forward view (undistorted)",
@@ -410,8 +415,11 @@ class _BaseCalibrationApp:
         dialog.wait_window()
 
     def _set_status(self, text):
+        # No update_idletasks() here: these are called from inside after()
+        # callbacks, and pumping the event loop there can reenter the live
+        # queue poll. Callers that block the loop (image load, the solve) ask
+        # for a repaint explicitly.
         self.bottom_status.configure(text=text)
-        self.root.update_idletasks()
 
     def _append_log(self, line):
         self.log_box.configure(state="normal")
@@ -421,7 +429,6 @@ class _BaseCalibrationApp:
             self.log_box.delete("1.0", f"{n_lines - MAX_LOG_LINES + 1}.0")
         self.log_box.see("end")
         self.log_box.configure(state="disabled")
-        self.root.update_idletasks()
 
     def _write_text(self, widget, text):
         widget.configure(state="normal")
@@ -840,6 +847,36 @@ class _BaseCalibrationApp:
             self.current_sample_index = (self.current_sample_index - 1) % len(self.calibrator.db)
             self._show_current_sample()
 
+    def delete_sample(self):
+        """
+        Drop the browsed sample from the db.
+
+        A mis-ordered UV-dot detection yields a plausible corners array that
+        is_good_sample (which only sees four numbers) happily accepts, and it
+        then poisons the solve. Batch mode can re-run; a live session has no
+        other recovery.
+        """
+        cal = self.calibrator
+        if cal is None or not cal.db:
+            messagebox.showinfo("No samples", "No accepted samples to delete.")
+            return
+
+        removed = Path(cal.db[self.current_sample_index].image_path).name
+        cal.db.pop(self.current_sample_index)
+        # Deleting invalidates any previous solve, and the cached guide is
+        # keyed on len(db) -- which a delete plus an accept leaves unchanged.
+        cal.calibrated = False
+        self.save_button.configure(state="disabled")
+        self._guide_db_len = -1
+
+        self.current_sample_index = (
+            min(self.current_sample_index, len(cal.db) - 1) if cal.db else 0
+        )
+
+        self._append_log(f"deleted sample: {removed} ({len(cal.db)} remaining)")
+        self._update_progress_panel()
+        self._show_current_sample()
+
     # ------------------------------------------------------------------
     # Actions
     # ------------------------------------------------------------------
@@ -860,12 +897,21 @@ class _BaseCalibrationApp:
                 return
 
         try:
-            self._set_status("Running UV-DAR calibration. This can take a while...")
-            cal.cal_fromcorners(
-                do_find_center=True,
-                fast_find_center=not self.slow_find_center.get(),
-                refine_corners=False,
+            # The solve blocks the Tk thread for seconds; without a busy
+            # cursor and a forced repaint the window just looks frozen.
+            self._set_status(
+                f"Solving over {len(cal.db)} samples. This can take a while..."
             )
+            self.root.configure(cursor="watch")
+            self.root.update_idletasks()
+            try:
+                cal.cal_fromcorners(
+                    do_find_center=True,
+                    fast_find_center=not self.slow_find_center.get(),
+                    refine_corners=False,
+                )
+            finally:
+                self.root.configure(cursor="")
             self.save_button.configure(state="normal")
             self.forward_view_toggle.configure(state="normal")
 
@@ -1001,6 +1047,9 @@ class BatchCalibrationApp(_BaseCalibrationApp):
                 preview_dir=str(Path(self.image_dir.get()) / "detected_marker_previews"),
             )
             self.calibrator = Calibrator(board, run_config)
+            # New Calibrator: a coincidentally equal db length must not serve
+            # the previous run's cached guide.
+            self._guide_db_len = -1
             self.current_sample_index = 0
             self.save_button.configure(state="disabled")
             self.forward_view_var.set(False)
@@ -1014,6 +1063,9 @@ class BatchCalibrationApp(_BaseCalibrationApp):
 
             for k, path in enumerate(files, start=1):
                 self._set_status(f"Analyzing image {k}/{len(files)}: {Path(path).name}")
+                # This loop blocks the event loop, so ask for the repaint
+                # _set_status no longer does on its own.
+                self.root.update_idletasks()
                 result = self.calibrator.handle_frame(read_image_gray(path), path)
                 self._append_log(f"image {k}: {result.reason}")
                 if result.detected and not result.accepted:
@@ -1071,6 +1123,9 @@ class LiveCalibrationApp(_BaseCalibrationApp):
         self._latest_preview = None
         self._latest_corners = None
         self._latest_outcome = "waiting for first processed frame"
+        self._last_frame_t = time.monotonic()
+        self._fps = 0.0
+        self._stale_warned = False
         super().__init__(root, **kwargs)
 
         self.calibrator = calibrator
@@ -1097,6 +1152,10 @@ class LiveCalibrationApp(_BaseCalibrationApp):
     def _refresh_capture_button(self):
         running = self.consumer.capturing.is_set()
         self.capture_button.configure(text=("Stop Capture" if running else "Start Capture"))
+        # FrameConsumerThread appends to db from another thread. Rather than
+        # lock every db access, deletion is only offered while capture is
+        # stopped -- the same thing calibrate() already requires.
+        self.delete_button.configure(state="disabled" if running else "normal")
 
     def toggle_capture(self):
         if self.consumer.capturing.is_set():
@@ -1157,17 +1216,38 @@ class LiveCalibrationApp(_BaseCalibrationApp):
                 break
         if latest_preview is not None:
             self._latest_preview = latest_preview
+            now = time.monotonic()
+            dt = now - self._last_frame_t
+            if dt > 0:
+                # Exponential moving average; a raw 1/dt reading jitters too
+                # much to be readable in a status bar.
+                self._fps = 0.9 * self._fps + 0.1 * (1.0 / dt)
+            self._last_frame_t = now
+            self._stale_warned = False
 
         if self.consumer.capturing.is_set() and self._latest_preview is not None:
             img, pts = self._apply_forward_view(self._latest_preview, self._latest_corners)
             self._render_frame(
                 img, pts, f"Live preview: {self._latest_outcome}", show_guidance=True,
             )
-            self._set_status(
-                f"Live capture on '{self._subscribed_topic}': "
-                f"{len(self.calibrator.db)} accepted, {self.n_rejected} rejected, "
-                f"{self.n_failed} without detection."
-            )
+        # Outside the render branch on purpose: a stream that stopped
+        # delivering has no preview to render, and that is exactly when the
+        # user needs to be told. A wrong-QoS or wrong-topic subscription is
+        # silent at the DDS layer, so silence has to be surfaced here.
+        if self.consumer.capturing.is_set():
+            if time.monotonic() - self._last_frame_t > 3.0:
+                if not self._stale_warned:
+                    self._set_status(
+                        f"No frames on '{self._subscribed_topic}' -- "
+                        "is the camera publishing?"
+                    )
+                    self._stale_warned = True
+            else:
+                self._set_status(
+                    f"Live capture on '{self._subscribed_topic}' at "
+                    f"{self._fps:.1f} fps: {len(self.calibrator.db)} accepted, "
+                    f"{self.n_rejected} rejected, {self.n_failed} without detection."
+                )
 
         self.root.after(self.POLL_MS, self._poll_queue)
 
