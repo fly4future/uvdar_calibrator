@@ -251,10 +251,15 @@ class Calibrator:
             corners, self.board, self.image_size, valid_region=self.valid_region_px()
         )
 
-        if not coverage.is_good_sample(params, self.db_params(), self.sample_threshold):
+        if not coverage.is_good_sample(
+            params, self.db_params(), self.sample_threshold, self.param_ranges
+        ):
             if self.preview_dir is not None and self.save_previews_for_rejected:
                 self._save_preview(image, corners, image_path)
-            distances = [coverage.param_distance(params, p) for p in self.db_params()]
+            distances = [
+                coverage.param_distance(params, p, self.param_ranges)
+                for p in self.db_params()
+            ]
             nearest = int(np.argmin(distances)) + 1
             return self._result(
                 image_path,

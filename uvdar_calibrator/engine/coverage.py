@@ -41,7 +41,10 @@ from .board import LedGridBoard
 # against the camera's actual usable FOV circle (see valid_region) instead
 # of the full rectangular frame, which is the real fix for a fisheye lens
 # whose reachable board positions are narrower than the sensor rectangle.
-DEFAULT_SAMPLE_THRESHOLD = 0.15               # is_good_sample min L1 param distance
+# In units of target spans (param_distance normalizes by DEFAULT_PARAM_RANGES).
+# 0.30 here selects the same 23 of 26 example_images/ that the old raw-L1 0.15
+# did, so this rescaling is behavior-neutral on the reference set.
+DEFAULT_SAMPLE_THRESHOLD = 0.30               # is_good_sample min normalized param distance
 DEFAULT_PARAM_RANGES = (0.6, 0.6, 0.3, 0.45)  # compute_goodenough targets (X, Y, Size, Skew)
 DEFAULT_MIN_DB_SIZE = 20                      # readiness floor, ANDed with full range progress
 
@@ -185,21 +188,37 @@ def get_parameters(
     return [p_x, p_y, p_size, skew]
 
 
-def param_distance(p1: Sequence[float], p2: Sequence[float]) -> float:
-    """L1 distance between two parameter vectors."""
-    return sum(abs(a - b) for (a, b) in zip(p1, p2))
+def param_distance(
+    p1: Sequence[float],
+    p2: Sequence[float],
+    param_ranges: Sequence[float] = DEFAULT_PARAM_RANGES,
+) -> float:
+    """
+    L1 distance between two parameter vectors, per-axis normalized by param_ranges.
+
+    ROS summed the raw differences, but the four axes have very different
+    reachable extents: X can realistically span ~0.8 of the frame while Size
+    on this rig spans ~0.25. A raw sum therefore lets position dominate the
+    accept/reject decision and leaves it nearly blind to distance -- exactly
+    the axis the Taylor polynomial needs varied. Dividing each axis by its
+    target span makes the distance dimensionless ("how many target-spans
+    apart"), so sample_threshold means the same thing on every axis and on
+    every rig, instead of being secretly coupled to param_ranges.
+    """
+    return sum(abs(a - b) / r for (a, b, r) in zip(p1, p2, param_ranges))
 
 
 def is_good_sample(
     params: Sequence[float],
     db_params: Sequence[Sequence[float]],
     threshold: float = DEFAULT_SAMPLE_THRESHOLD,
+    param_ranges: Sequence[float] = DEFAULT_PARAM_RANGES,
 ) -> bool:
     """
     Return True if the sample is sufficiently different from every accepted one.
 
-    An empty database always accepts (as in ROS). Beyond the plain L1-distance
-    check (ROS's original criterion), a sample is also accepted if it
+    An empty database always accepts (as in ROS). Beyond the normalized
+    L1-distance check (see param_distance), a sample is also accepted if it
     meaningfully extends the current per-axis min or max of db_params by more
     than MIN_RANGE_EXTENSION. The L1 check compares the *whole* parameter
     vector, so a frame that pushes one axis (e.g. X) to a new extreme can
@@ -213,7 +232,7 @@ def is_good_sample(
     if not db_params:
         return True
 
-    d = min(param_distance(params, p) for p in db_params)
+    d = min(param_distance(params, p, param_ranges) for p in db_params)
     if d > threshold:
         return True
 

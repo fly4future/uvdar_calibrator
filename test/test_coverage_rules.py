@@ -113,7 +113,31 @@ def test_bins_do_not_gate_readiness():
     print("ok: bin report does not gate readiness")
 
 
+def test_param_distance_is_range_normalized():
+    """Equal fractions of an axis's target span must cost the same distance."""
+    ranges = (0.6, 0.6, 0.3, 0.45)
+    base = [0.5, 0.5, 0.2, 0.2]
+
+    # Move 10% of the target span along X, then 10% along Size. Raw L1 would
+    # rate the Size move as less than half the X move; normalized, they tie.
+    moved_x = [0.5 + 0.1 * ranges[0], 0.5, 0.2, 0.2]
+    moved_size = [0.5, 0.5, 0.2 + 0.1 * ranges[2], 0.2]
+
+    d_x = coverage.param_distance(base, moved_x, ranges)
+    d_size = coverage.param_distance(base, moved_size, ranges)
+    assert abs(d_x - d_size) < 1e-12, f"X move {d_x} != Size move {d_size}"
+    assert abs(d_x - 0.1) < 1e-12, f"expected 0.1 target-spans, got {d_x}"
+
+    # Same-sized moves are what the threshold compares against, so a Size-only
+    # difference must be able to clear a threshold an X-only one clears.
+    assert coverage.is_good_sample(moved_size, [base], 0.05, ranges), (
+        "a 10%-of-span Size move must clear a 0.05-span threshold"
+    )
+    print("ok: param_distance is range-normalized")
+
+
 if __name__ == "__main__":
+    test_param_distance_is_range_normalized()
     test_cached_metric_matches_fresh_computation()
     test_db_metrics_tracks_accepted_samples()
     test_goodenough_requires_both_count_and_range()
