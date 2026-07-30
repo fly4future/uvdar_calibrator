@@ -17,14 +17,15 @@ sample selection, calibration, and export still succeed.
 
 ## Running it
 
-Install deps: `pip install -r requirements.txt` (numpy, matplotlib, opencv-python; scipy is
-optional and only used for `.mat` export).
+Install deps: `pip install -r requirements.txt` (numpy, matplotlib, opencv-python). Tkinter is
+needed for the GUI *and* for the diagnostics window, so plots require it too.
 
 ```bash
 # GUI (recommended entry point)
 python -m uvdar_calibrator --image_dir photos --gui
 
-# Full CLI calibration (no GUI)
+# Full CLI calibration (no GUI). Plots are opt-in, as in the GUI: add --plots for the
+# tabbed diagnostics window.
 python -m uvdar_calibrator --image_dir photos
 
 # Sample-selection / readiness check only, no calibration
@@ -48,7 +49,8 @@ numpy 2:
 
 ```bash
 source calibrator/bin/activate
-python test/test_coverage_rules.py && python test/test_live_qos.py \
+python test/test_coverage_rules.py && python test/test_plots_headless.py \
+    && python test/test_forward_view.py && python test/test_live_qos.py \
     && python test/test_live_endtoend.py
 ```
 
@@ -65,7 +67,8 @@ uvdar_calibrator/
 │   ├── coverage.py           # get_parameters/is_good_sample/compute_goodenough (+ bin-based hint report)
 │   └── calibrator.py         # Calibrator engine: db/goodenough/handle_frame/cal_fromcorners/export
 ├── diagnostics/
-│   └── plots.py             # matplotlib diagnostics (block on window close)
+│   ├── plots.py              # matplotlib diagnostics: build figures, never show them
+│   └── plot_window.py        # one Tk window, one tab per figure (the only Tk outside apps/)
 └── apps/                   # the three ways to drive the engine (+ a test publisher)
     ├── gui.py                 # Tkinter app: feeds photos (or live frames) into Calibrator, live range bars
     ├── cli.py                  # argparse entry point (offline/batch, calibrate_offline console_script)
@@ -94,8 +97,10 @@ The direct analogue of ROS's `MonoCalibrator`. One photo == one "frame":
 - `cal_fromcorners()` assembles `Xt/Yt/Xp_abs/Yp_abs` from the accepted `db` only and runs the
   OCamCalib solve: initial `calibrate()` → `findcenter_fast()` (or slow `findcenter`) →
   optional `recomp_corner_calib` → final `calibrate()` + `reprojectpoints()`.
-- `save()`/`export_txt()` write `Omni_Calib_Results.npz` (+ optional `.mat`) and
-  `calib_results.txt` (OCamCalib text format, computing `invpol` via `findinvpoly`).
+- `export_txt()` writes `calib_results.txt` (OCamCalib text format, computing `invpol` via
+  `findinvpoly`) and returns the path. It takes either an `output_dir` (CLI) or a full
+  `path` (the GUI asks the user via `asksaveasfilename`). `.npz`/`.mat` output was removed
+  — the text file is the only artifact, and that removed the package's only scipy use.
 
 The tuning constants in `engine/coverage.py` (`DEFAULT_SAMPLE_THRESHOLD = 0.30`, in units of
 target spans — not raw parameter units,
@@ -157,6 +162,20 @@ Tkinter app that reuses the engine directly — when changing pipeline behavior,
 mirror ROS's `redraw_monocular` bars (colored segment from min to max accepted value, green
 at full progress). CALIBRATE is driven by `goodenough` (with an explicit confirm-to-override
 when not ready); SAVE/EXPORT by `calibrated`.
+
+The **`Forward view (undistorted)`** checkbox (enabled only once calibrated) remaps the live
+preview through `ocam_model.build_forward_view_maps` — a rectilinear/pinhole rendering of the
+solved model. It is a *sanity check on the calibration*: the fisheye bows straight world lines,
+and a correct model straightens them, so the LED grid should look like a clean perspective
+rectangle rather than a barrel-bowed one. `test/test_forward_view.py` pins that down
+quantitatively (0.725 px → 0.157 px per-line collinearity error on `example_images/`).
+
+Do **not** try to widen this view to show the whole frame. A rectilinear projection sends a ray
+at 90° off-axis to infinity, and this lens's border rays reach 125° — so no finite FOV contains
+the rim, while the magnification penalty `1/tan(hfov/2)` shrinks the pattern you're inspecting
+(0.18× at 160°, which renders as an hourglass with a smudge in the middle). Hence the fixed
+`DEFAULT_FORWARD_VIEW_HFOV_DEG = 90.0`; showing everything would need a non-rectilinear
+projection, which would not straighten lines and so would not serve the check.
 
 ### Coordinate/order conventions to keep straight
 
