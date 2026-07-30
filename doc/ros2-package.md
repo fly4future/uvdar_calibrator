@@ -41,5 +41,6 @@ detection with near-duplicate frames. Accept/reject, the readiness bars, CALIBRA
 SAVE/EXPORT, and the Forward view toggle all work identically to the batch GUI.
 
 There is no `SetCameraInfo` upload step: `sensor_msgs/CameraInfo`'s distortion models
-have no slot for the OCamCalib polynomial, so results stay as local files
-(`Omni_Calib_Results.npz`/`.mat` + `calib_results.txt`), same as the offline path.
+have no slot for the OCamCalib polynomial, so the result stays a local file
+(`calib_results.txt`, written wherever the save dialog points), same as the offline
+path.

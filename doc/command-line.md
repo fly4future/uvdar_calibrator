@@ -13,6 +13,24 @@ prints a readiness report, and then calibrates. If the accepted samples do not y
 cover enough variation, it prints a warning and calibrates anyway — treat that
 result as preliminary.
 
+It writes `calib_results.txt` and `calibration_coverage.txt` to `--output_dir`
+(default: the current directory).
+
+## Diagnostic Plots
+
+Plots are opt-in, as in the GUI:
+
+```bash
+python -m uvdar_calibrator --image_dir photos --plots
+```
+
+This opens one window with a tab per diagnostic — reprojection, error analysis,
+projection function, and extrinsics — and blocks until you close it, before the
+results are exported. See [The Diagnostics
+Window](using-the-gui.md#the-diagnostics-window) for what each tab tells you.
+Without `--plots`, the same per-sample and average errors are still printed to the
+console.
+
 ## Coverage-Only Mode
 
 To check image coverage without running full calibration:

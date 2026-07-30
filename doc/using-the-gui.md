@@ -24,15 +24,27 @@ python -m uvdar_calibrator --image_dir photos --gui
    capture" box gives hints about what is missing).
 5. Once the status says READY TO CALIBRATE, click **CALIBRATE**. (You can
    also calibrate earlier after confirming a warning, but treat the result
-   as preliminary.)
+   as preliminary.) Tick **Show plots after calibration** first if you want
+   the diagnostics window — it is off by default, and the checkbox is read
+   when you press CALIBRATE.
 6. Review the reprojection error. Once calibrated, the **Forward view
-   (undistorted)** checkbox becomes available — toggle it to preview a
-   cropped, forward-facing perspective crop generated from the calibrated
-   model instead of the raw fisheye frame, as a visual sanity check (works
-   both while browsing accepted samples with Previous/Next and, in live
-   mode, on the incoming stream).
-7. Click **SAVE / EXPORT** to write `Omni_Calib_Results.npz` and
-   `calib_results.txt`.
+   (undistorted)** checkbox becomes available. It re-renders the frame the
+   way an ordinary perspective camera would have seen it, using the model you
+   just solved. This is a sanity check: the fisheye bows the grid's rows and
+   columns, and a correct model straightens them again, so the LED grid should
+   look like a clean perspective rectangle. It works both while browsing
+   accepted samples with Previous/Next and, in live mode, on the incoming
+   stream.
+
+   The view shows the central 90° and crops the rest, on purpose. A
+   perspective projection cannot represent a ray at or past 90° from the
+   optical axis, so a fisheye's outer rim is unreachable at *any* setting —
+   and widening the view shrinks the pattern you are trying to inspect (at
+   160° the grid renders about 5× smaller, which is useless for judging
+   straightness).
+7. Click **SAVE / EXPORT**. A save dialog opens, defaulting to
+   `calib_results.txt` in the output folder — choose where to write it. That
+   text file is the only output.
 
 Important: **some photos being rejected is normal and correct.** Two photos
 of the grid in nearly the same position, size, and tilt add no new
@@ -69,8 +81,19 @@ For each image, the displayed error is the average error across all detected UV
 markers in that image. The center-to-point distance is useful for coverage and
 field-of-view analysis, but it is not calibration error.
 
-## Note
+## The Diagnostics Window
 
-Some graphs and calibration information open in separate plot windows. The program
-may pause until the current plot window is closed. To continue to the next graph or
-calibration step, close the current plot tab/window first.
+With **Show plots after calibration** ticked, CALIBRATE opens a single window with
+one tab per diagnostic. It does not block the GUI — in live mode capture keeps
+running behind it. Each tab has the standard matplotlib toolbar, so use the
+magnifier to zoom; with 20+ samples the reprojection panels are necessarily small.
+
+| Tab | What it shows | What to look for |
+| --- | --- | --- |
+| **Reprojection** | One panel per accepted sample: detected markers (`+`) against the model's reprojected grid (`o`) | The two should sit on top of each other. A panel where they drift apart is a bad sample. |
+| **Error analysis** | Reprojection error of every marker, per sample | A tight cluster near the origin. A sample that fans out wide is dragging the solve. |
+| **Projection function** | The solved polynomial: image radius vs ray angle | A smooth monotonic curve. Wiggles or a fold-back mean the polynomial is overfitted. |
+| **Extrinsics** | 3D scatter of where the board was for each sample, in mm relative to the camera | Spread in all directions and a wide range of distances. Points clustered at one distance mean your Size variety is not real; a point behind the camera or absurdly far away is a failed pose that will degrade the whole solve. |
+
+The console also prints the per-sample and average reprojection error alongside
+these, whether or not you ask for the plots.

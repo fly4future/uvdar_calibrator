@@ -41,6 +41,9 @@ pip install -r requirements.txt
 python -m uvdar_calibrator --image_dir photos --gui
 ```
 
+Needs Tkinter, for the GUI and for the diagnostics window (`python3-tk` on Debian
+and Ubuntu). The only output is a `calib_results.txt` in OCamCalib's text format.
+
 **ROS 2** (once built with colcon — see [Running as a ROS 2 Package](doc/ros2-package.md)):
 
 ```bash
