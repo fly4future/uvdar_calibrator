@@ -1,16 +1,24 @@
 """
-Matplotlib plotting/diagnostics for a completed calibration.
+Matplotlib diagnostics for a completed calibration.
 
-All functions here are plotting-only and block on window close, as in the
-original tool. They operate on explicit arrays plus an
+Every function here draws into an ``Axes``/``Figure`` handed to it and shows
+nothing: :func:`build_diagnostic_figures` assembles the four diagnostics as
+plain :class:`matplotlib.figure.Figure` objects, and
+:mod:`uvdar_calibrator.diagnostics.plot_window` puts them on screen as tabs of
+one window. Pyplot is deliberately not imported -- it is the global figure
+manager, and going through it is what used to open one blocking window per
+accepted sample (N + 3 windows to close by hand).
+
+They operate on explicit arrays plus an
 :class:`~uvdar_calibrator.engine.ocam_model.OCamModel` (no engine/GUI state).
 """
 
 from __future__ import annotations
 
-from typing import Optional, Sequence
+import math
+from typing import List, Optional, Sequence, Tuple
 
-import matplotlib.pyplot as plt
+from matplotlib.figure import Figure
 import numpy as np
 
 from ..engine.ocam_model import (
@@ -21,8 +29,11 @@ from ..engine.ocam_model import (
     world2cam,
 )
 
+COLORS = "brgkcm"
+
 
 def draw_axes(
+    ax,
     Xp_abs: np.ndarray,
     Yp_abs: np.ndarray,
     n_sq_y: int,
@@ -36,8 +47,8 @@ def draw_axes(
     xo_Y = Xp_abs[: n_sq_y + 1]
     yo_Y = Yp_abs[: n_sq_y + 1]
 
-    plt.plot(yo_X, xo_X, "g-", linewidth=2)
-    plt.plot(yo_Y, xo_Y, "g-", linewidth=2)
+    ax.plot(yo_X, xo_X, "g-", linewidth=2)
+    ax.plot(yo_Y, xo_Y, "g-", linewidth=2)
 
     if len(xo_X) < 2 or len(xo_Y) < 2:
         return
@@ -83,7 +94,7 @@ def draw_axes(
     )
     Oloc = normed(Oloc) * delta + origin
 
-    plt.text(
+    ax.text(
         Xloc[1],
         Xloc[0],
         "X",
@@ -92,7 +103,7 @@ def draw_axes(
         fontweight="bold",
     )
 
-    plt.text(
+    ax.text(
         Yloc[1],
         Yloc[0],
         "Y",
@@ -102,7 +113,7 @@ def draw_axes(
         ha="center",
     )
 
-    plt.text(
+    ax.text(
         Oloc[1],
         Oloc[0],
         "O",
@@ -112,7 +123,8 @@ def draw_axes(
     )
 
 
-def reproject_calib(
+def draw_reprojection(
+    fig: Figure,
     ocam_model: OCamModel,
     RRfin: np.ndarray,
     ima_proc: Sequence[int],
@@ -123,14 +135,24 @@ def reproject_calib(
     images: Optional[Sequence[np.ndarray]] = None,
     n_sq_y: int = 4,
 ) -> None:
-    colors = "brgkcm"
-
+    """Draw one panel per accepted sample into a single figure's subplot grid."""
     if ocam_model.ss is None:
         print("Need to calibrate before showing image reprojection.")
         return
 
-    for kk in ima_proc:
+    ima_proc = list(ima_proc)
+    n = len(ima_proc)
+    if n == 0:
+        return
+
+    # Squarish grid: with 23 samples the panels are small, which is what the
+    # toolbar's zoom is for -- better than 23 windows.
+    n_cols = int(math.ceil(math.sqrt(n)))
+    n_rows = int(math.ceil(n / n_cols))
+
+    for panel, kk in enumerate(ima_proc, start=1):
         k = idx(kk)
+        ax = fig.add_subplot(n_rows, n_cols, panel)
 
         if images is not None and k < len(images):
             I = images[k]  # noqa: E741 -- MATLAB port keeps upstream's name
@@ -155,34 +177,31 @@ def reproject_calib(
         xp = m[0, :]
         yp = m[1, :]
 
-        plt.figure(5 + kk)
-        plt.clf()
+        ax.imshow(I, cmap="gray")
 
-        plt.imshow(I, cmap="gray")
+        ax.set_title(f"Image {kk}", fontsize=9)
 
-        plt.title(f"Image {kk} - Image points (+) and reprojected grid points (o)")
-
-        plt.plot(
+        ax.plot(
             Yp_abs[:, 0, k],
             Xp_abs[:, 0, k],
             "r+",
         )
 
-        plt.plot(
+        ax.plot(
             yp,
             xp,
-            colors[(kk - 1) % 6] + "o",
+            COLORS[(kk - 1) % 6] + "o",
             fillstyle="none",
         )
 
-        plt.plot(
+        ax.plot(
             ocam_model.yc,
             ocam_model.xc,
             "ro",
             fillstyle="none",
         )
 
-        plt.axis(
+        ax.axis(
             [
                 1,
                 ocam_model.width,
@@ -190,17 +209,21 @@ def reproject_calib(
                 1,
             ]
         )
+        ax.set_xticks([])
+        ax.set_yticks([])
 
         draw_axes(
+            ax,
             Xp_abs[:, 0, k],
             Yp_abs[:, 0, k],
             n_sq_y,
         )
 
-    plt.show()
+    fig.suptitle("Image points (+) and reprojected grid points (o)")
 
 
-def analyse_error(
+def draw_error_analysis(
+    ax,
     ocam_model: OCamModel,
     RRfin: np.ndarray,
     ima_proc: Sequence[int],
@@ -209,11 +232,6 @@ def analyse_error(
     Xp_abs: np.ndarray,
     Yp_abs: np.ndarray,
 ) -> None:
-    plt.figure(5)
-    plt.clf()
-
-    colors = "brgkcm"
-
     err = []
     stderr = []
     MSE = 0.0
@@ -266,16 +284,16 @@ def analyse_error(
 
         MSE += float(np.nansum(sqerr))
 
-        plt.plot(
+        ax.plot(
             Xp_abs[:, 0, k] - xp,
             Yp_abs[:, 0, k] - yp,
-            colors[(i - 1) % 6] + "+",
+            COLORS[(i - 1) % 6] + "+",
         )
 
-    plt.grid(True)
-    plt.title("Analyse error")
-    plt.xlabel("X residual [pixels]")
-    plt.ylabel("Y residual [pixels]")
+    ax.grid(True)
+    ax.set_title("Analyse error")
+    ax.set_xlabel("X residual [pixels]")
+    ax.set_ylabel("Y residual [pixels]")
 
     print("\nAverage reprojection error computed for each chessboard [pixels]:\n")
 
@@ -288,10 +306,8 @@ def analyse_error(
     print("ss =")
     print(ocam_model.ss)
 
-    plt.show()
 
-
-def plot_calibration_results(ocam_model: OCamModel) -> None:
+def draw_projection_function(fig: Figure, ocam_model: OCamModel) -> None:
     ss = ocam_model.ss
 
     if ss is None:
@@ -307,29 +323,23 @@ def plot_calibration_results(ocam_model: OCamModel) -> None:
 
     angle_deg = np.degrees(np.arctan2(rho, -f_rho)) - 90.0
 
-    plt.figure(3)
-    plt.clf()
+    ax1 = fig.add_subplot(2, 1, 1)
+    ax1.plot(rho, f_rho)
+    ax1.grid(True)
+    ax1.axis("equal")
+    ax1.set_xlabel("Distance 'rho' from the image center in pixels")
+    ax1.set_ylabel("f(rho)")
+    ax1.set_title("Forward projection function")
 
-    plt.subplot(2, 1, 1)
-    plt.plot(rho, f_rho)
-    plt.grid(True)
-    plt.axis("equal")
-    plt.xlabel("Distance 'rho' from the image center in pixels")
-    plt.ylabel("f(rho)")
-    plt.title("Forward projection function")
-
-    plt.subplot(2, 1, 2)
-    plt.plot(rho, angle_deg)
-    plt.grid(True)
-    plt.xlabel("Distance 'rho' from the image center in pixels")
-    plt.ylabel("Degrees")
-    plt.title("Angle of optical ray as a function of distance from circle center (pixels)")
-
-    plt.tight_layout()
-    plt.show()
+    ax2 = fig.add_subplot(2, 1, 2)
+    ax2.plot(rho, angle_deg)
+    ax2.grid(True)
+    ax2.set_xlabel("Distance 'rho' from the image center in pixels")
+    ax2.set_ylabel("Degrees")
+    ax2.set_title("Angle of optical ray as a function of distance from circle center (pixels)")
 
 
-def show_calib_results(
+def print_calib_summary(
     ocam_model: OCamModel,
     RRfin: np.ndarray,
     ima_proc: Sequence[int],
@@ -338,6 +348,7 @@ def show_calib_results(
     Xp_abs: np.ndarray,
     Yp_abs: np.ndarray,
 ) -> None:
+    """Print the per-image reprojection table and the fitted model, no plots."""
     M = np.column_stack(
         [
             np.asarray(Xt).ravel(),
@@ -364,18 +375,15 @@ def show_calib_results(
     print("yc =")
     print(ocam_model.yc)
 
-    plot_calibration_results(ocam_model)
 
-
-def show_extrinsic(
+def draw_extrinsics(
+    ax,
     RRfin: np.ndarray,
     ima_proc: Sequence[int],
     Xt: np.ndarray,
     Yt: np.ndarray,
 ) -> None:
-    fig = plt.figure()
-    ax = fig.add_subplot(111, projection="3d")
-
+    """Draw board points and per-sample camera translations; ax must be 3d."""
     ax.scatter(
         np.asarray(Xt).ravel(),
         np.asarray(Yt).ravel(),
@@ -395,4 +403,52 @@ def show_extrinsic(
     ax.set_ylabel("Y")
     ax.set_zlabel("Z")
 
-    plt.show()
+
+def build_diagnostic_figures(
+    ocam_model: OCamModel,
+    RRfin: np.ndarray,
+    ima_proc: Sequence[int],
+    Xt: np.ndarray,
+    Yt: np.ndarray,
+    Xp_abs: np.ndarray,
+    Yp_abs: np.ndarray,
+    images: Optional[Sequence[np.ndarray]] = None,
+    n_sq_y: int = 4,
+) -> List[Tuple[str, Figure]]:
+    """
+    Build the four diagnostics as ``(tab title, Figure)`` pairs.
+
+    Nothing is shown; pass the result to
+    :func:`uvdar_calibrator.diagnostics.plot_window.show_diagnostics`. The
+    layout engine is set per figure rather than calling ``tight_layout`` here,
+    because that needs a renderer these figures do not have until a canvas is
+    attached.
+    """
+    figures: List[Tuple[str, Figure]] = []
+
+    fig_reproj = Figure(figsize=(11, 8))
+    draw_reprojection(
+        fig_reproj, ocam_model, RRfin, ima_proc, Xt, Yt, Xp_abs, Yp_abs,
+        images=images, n_sq_y=n_sq_y,
+    )
+    figures.append(("Reprojection", fig_reproj))
+
+    fig_err = Figure(figsize=(11, 8), layout="constrained")
+    draw_error_analysis(
+        fig_err.add_subplot(1, 1, 1),
+        ocam_model, RRfin, ima_proc, Xt, Yt, Xp_abs, Yp_abs,
+    )
+    figures.append(("Error analysis", fig_err))
+
+    fig_proj = Figure(figsize=(11, 8), layout="constrained")
+    draw_projection_function(fig_proj, ocam_model)
+    figures.append(("Projection function", fig_proj))
+
+    fig_ext = Figure(figsize=(11, 8), layout="constrained")
+    draw_extrinsics(
+        fig_ext.add_subplot(1, 1, 1, projection="3d"),
+        RRfin, ima_proc, Xt, Yt,
+    )
+    figures.append(("Extrinsics", fig_ext))
+
+    return figures

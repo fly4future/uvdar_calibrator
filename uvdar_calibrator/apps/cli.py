@@ -135,13 +135,13 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--output_dir",
         default=".",
-        help="Folder for Omni_Calib_Results and calib_results.txt.",
+        help="Folder for calib_results.txt and the readiness report.",
     )
 
     p.add_argument(
-        "--no_plots",
+        "--plots",
         action="store_true",
-        help="Run calibration/export without showing plots.",
+        help="Show the diagnostics window (one window, one tab per plot) after calibrating.",
     )
 
     p.add_argument(
@@ -300,35 +300,24 @@ def run(
     )
 
     if do_plots:
-        from ..diagnostics import plots
+        from ..diagnostics import plot_window, plots
 
         Xp_abs, Yp_abs, ima_proc = cal.assemble()
 
-        print("\nStep 6: Reproject on images")
-        plots.reproject_calib(
+        print("\nStep 6: Diagnostics")
+        plots.print_calib_summary(
+            cal.last_ocam_model, cal.RRfin, ima_proc, cal.Xt, cal.Yt, Xp_abs, Yp_abs
+        )
+        figures = plots.build_diagnostic_figures(
             cal.last_ocam_model, cal.RRfin, ima_proc, cal.Xt, cal.Yt,
             Xp_abs, Yp_abs,
             images=[s.image for s in cal.db],
             n_sq_y=board.n_sq_y,
         )
+        # Blocks until the window is closed -- same as the old plt.show() did.
+        plot_window.show_diagnostics(figures)
 
-        print("\nStep 7: Analyze error")
-        plots.analyse_error(
-            cal.last_ocam_model, cal.RRfin, ima_proc, cal.Xt, cal.Yt, Xp_abs, Yp_abs
-        )
-
-        print("\nStep 8: Show calibration results")
-        plots.show_calib_results(
-            cal.last_ocam_model, cal.RRfin, ima_proc, cal.Xt, cal.Yt, Xp_abs, Yp_abs
-        )
-
-        print("\nStep 8b: Show extrinsic")
-        plots.show_extrinsic(cal.RRfin, ima_proc, cal.Xt, cal.Yt)
-
-    print("\nStep 9: Save calibration")
-    cal.save(output_dir=output_dir)
-
-    print("\nStep 9b: Export calib_results.txt")
+    print("\nStep 7: Export calib_results.txt")
     cal.export_txt(output_dir=output_dir)
 
     print("\nCalibration workflow complete.")
@@ -367,7 +356,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         board=board,
         config=config,
         output_dir=args.output_dir,
-        do_plots=not args.no_plots,
+        do_plots=args.plots,
         do_find_center=not args.skip_find_center,
         fast_find_center=not args.slow_find_center,
         refine_corners=args.refine_corners,

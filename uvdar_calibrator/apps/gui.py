@@ -110,7 +110,7 @@ class _BaseCalibrationApp:
         # there can only display the real launch-time settings, not edit
         # them (same reasoning as board_option_widgets being disabled).
         self._advanced_settings_read_only = False
-        self.no_plots = tk.BooleanVar(value=True)
+        self.show_plots = tk.BooleanVar(value=False)
         self.forward_view_var = tk.BooleanVar(value=False)
 
         self.calibrator: Calibrator | None = None
@@ -167,7 +167,7 @@ class _BaseCalibrationApp:
             opts, text="MATLAB-style slow Find Center", variable=self.slow_find_center
         ).pack(side=tk.LEFT, padx=12)
         ttk.Checkbutton(
-            opts, text="No plots after calibration", variable=self.no_plots
+            opts, text="Show plots after calibration", variable=self.show_plots
         ).pack(side=tk.LEFT, padx=8)
 
         main = ttk.Frame(self.root, padding=8)
@@ -928,22 +928,22 @@ class _BaseCalibrationApp:
                 f"Center: ({cal.last_ocam_model.xc:.2f}, {cal.last_ocam_model.yc:.2f})",
             )
 
-            if not self.no_plots.get():
-                from ..diagnostics import plots
+            if self.show_plots.get():
+                from ..diagnostics import plot_window, plots
 
                 Xp_abs, Yp_abs, ima_proc = cal.assemble()
-                plots.reproject_calib(
+                plots.print_calib_summary(
+                    cal.last_ocam_model, cal.RRfin, ima_proc, cal.Xt, cal.Yt,
+                    Xp_abs, Yp_abs,
+                )
+                figures = plots.build_diagnostic_figures(
                     cal.last_ocam_model, cal.RRfin, ima_proc, cal.Xt, cal.Yt,
                     Xp_abs, Yp_abs,
                     images=[s.image for s in cal.db],
                     n_sq_y=cal.board.n_sq_y,
                 )
-                plots.analyse_error(
-                    cal.last_ocam_model, cal.RRfin, ima_proc, cal.Xt, cal.Yt, Xp_abs, Yp_abs
-                )
-                plots.show_calib_results(
-                    cal.last_ocam_model, cal.RRfin, ima_proc, cal.Xt, cal.Yt, Xp_abs, Yp_abs
-                )
+                # Toplevel, so live capture keeps running behind the plots.
+                plot_window.show_diagnostics(figures, parent=self.root)
         except Exception as exc:
             messagebox.showerror("Calibration failed", str(exc))
             self._set_status("Calibration failed.")
