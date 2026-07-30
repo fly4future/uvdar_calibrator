@@ -248,13 +248,7 @@ class _BaseCalibrationApp:
         self.save_button = ttk.Button(
             actions, text="SAVE / EXPORT", command=self.save_and_export, state="disabled"
         )
-        self.save_button.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=4)
-        ttk.Button(actions, text="Save Report", command=self.save_report).pack(
-            side=tk.LEFT, fill=tk.X, expand=True, padx=4
-        )
-        ttk.Button(actions, text="Exit", command=self.root.destroy).pack(
-            side=tk.LEFT, fill=tk.X, expand=True, padx=(4, 0)
-        )
+        self.save_button.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(4, 0))
 
         self.bottom_status = ttk.Label(self.root, text="", relief=tk.SUNKEN, anchor="w", padding=4)
         self.bottom_status.pack(side=tk.BOTTOM, fill=tk.X)
@@ -953,29 +947,22 @@ class _BaseCalibrationApp:
         if cal is None or not cal.calibrated:
             messagebox.showinfo("Not calibrated", "Run CALIBRATE first.")
             return
+        path = filedialog.asksaveasfilename(
+            title="Save calibration results",
+            initialdir=self.output_dir.get() or ".",
+            initialfile="calib_results.txt",
+            defaultextension=".txt",
+            filetypes=[("Text files", "*.txt"), ("All files", "*.*")],
+        )
+        if not path:
+            self._set_status("Save cancelled.")
+            return
         try:
-            out = self.output_dir.get() or "."
-            cal.save(output_dir=out)
-            cal.export_txt(output_dir=out)
-            out_abs = Path(out).resolve()
-            self._set_status(f"Saved Omni_Calib_Results and calib_results.txt to {out_abs}")
-            messagebox.showinfo(
-                "Saved",
-                f"Saved:\n{out_abs / 'Omni_Calib_Results.npz'}\n{out_abs / 'calib_results.txt'}",
-            )
+            saved = cal.export_txt(path=path)
+            self._set_status(f"Saved calibration results to {saved}")
+            messagebox.showinfo("Saved", f"Saved:\n{saved}")
         except Exception as exc:
             messagebox.showerror("Save failed", str(exc))
-
-    def save_report(self):
-        cal = self.calibrator
-        if cal is None:
-            messagebox.showinfo("No report", "No samples collected yet.")
-            return
-        out = Path(self.output_dir.get() or ".")
-        out.mkdir(parents=True, exist_ok=True)
-        path = out / "calibration_coverage.txt"
-        path.write_text(cal.report() + "\n", encoding="utf-8")
-        messagebox.showinfo("Saved", f"Saved readiness report to:\n{path.resolve()}")
 
 
 class BatchCalibrationApp(_BaseCalibrationApp):

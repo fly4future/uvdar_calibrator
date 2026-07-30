@@ -27,7 +27,6 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 import math
 from pathlib import Path
-import shutil
 from typing import Optional, Sequence, Tuple
 
 import numpy as np
@@ -1268,89 +1267,17 @@ def findinvpoly(
 # Save/export
 # -----------------------------------------------------------------------------
 
-def _serializable_calib_dict(
-    ocam_model: OCamModel,
-    RRfin: np.ndarray,
-    ima_proc: Sequence[int],
-    Xt: np.ndarray,
-    Yt: np.ndarray,
-    Xp_abs: np.ndarray,
-    Yp_abs: np.ndarray,
-    taylor_order: Optional[int],
-) -> dict:
-    return {
-        "Xt": Xt,
-        "Yt": Yt,
-        "Xp_abs": Xp_abs,
-        "Yp_abs": Yp_abs,
-        "RRfin": RRfin,
-        "ima_proc": np.asarray(ima_proc),
-        "taylor_order": taylor_order,
-        "xc": ocam_model.xc,
-        "yc": ocam_model.yc,
-        "width": ocam_model.width,
-        "height": ocam_model.height,
-        "c": ocam_model.c,
-        "d": ocam_model.d,
-        "e": ocam_model.e,
-        "ss": ocam_model.ss,
-        "invpol": ocam_model.invpol,
-    }
-
-
-def saving_calib(
-    ocam_model: OCamModel,
-    RRfin: np.ndarray,
-    ima_proc: Sequence[int],
-    Xt: np.ndarray,
-    Yt: np.ndarray,
-    Xp_abs: np.ndarray,
-    Yp_abs: np.ndarray,
-    taylor_order: Optional[int],
-    output_dir: str = ".",
-) -> None:
-    out = Path(output_dir)
-    out.mkdir(parents=True, exist_ok=True)
-
-    npz_path = out / "Omni_Calib_Results.npz"
-
-    if npz_path.exists():
-        pfn = 0
-
-        while (out / f"Omni_Calib_Results_old{pfn}.npz").exists():
-            pfn += 1
-
-        shutil.copyfile(npz_path, out / f"Omni_Calib_Results_old{pfn}.npz")
-
-        print(
-            "Copying the current Omni_Calib_Results.npz file to "
-            f"Omni_Calib_Results_old{pfn}.npz"
-        )
-
-    calib_dict = _serializable_calib_dict(
-        ocam_model, RRfin, ima_proc, Xt, Yt, Xp_abs, Yp_abs, taylor_order
-    )
-
-    np.savez(npz_path, **calib_dict)
-
-    try:
-        # SciPy is optional. Import dynamically so editors do not warn if it
-        # is not installed; the .npz file is always saved above.
-        scipy_io = __import__("scipy.io", fromlist=["savemat"])
-        scipy_io.savemat(
-            out / "Omni_Calib_Results.mat",
-            {"calib_data": calib_dict},
-        )
-    except Exception:
-        pass
-
-    print("done")
-
-
 def export_data(
     ocam_model: OCamModel,
     output_dir: str = ".",
-) -> None:
+    path: Optional[str] = None,
+) -> Path:
+    """
+    Write the OCamCalib text results and return the path written.
+
+    ``path`` names the file outright (the GUI asks the user for it); otherwise
+    the name stays ``calib_results.txt`` under ``output_dir``.
+    """
     if ocam_model.invpol is None:
         radius = math.sqrt(
             (ocam_model.width / 2.0) ** 2
@@ -1359,9 +1286,12 @@ def export_data(
 
         ocam_model.invpol, _, _ = findinvpoly(ocam_model.ss, radius)
 
-    path = Path(output_dir) / "calib_results.txt"
+    out_path = Path(path) if path else Path(output_dir) / "calib_results.txt"
+    out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    with open(path, "w", encoding="utf-8") as fid:
+    print(f'Exporting ocam_model to "{out_path.name}"')
+
+    with open(out_path, "w", encoding="utf-8") as fid:
         fid.write(
             "#polynomial coefficients for the DIRECT mapping function "
             "(ocam_model.ss in MATLAB). These are used by cam2world\n\n"
@@ -1389,4 +1319,5 @@ def export_data(
         fid.write('#image size: "height" and "width"\n\n')
         fid.write(f"{ocam_model.height:d} {ocam_model.width:d}\n\n")
 
-    print(f"Exported {path}")
+    print(f"Exported {out_path}")
+    return out_path.resolve()

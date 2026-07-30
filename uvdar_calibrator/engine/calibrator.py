@@ -34,7 +34,6 @@ from .ocam_model import (
     OCamModel,
     recomp_corner_calib,
     reprojectpoints,
-    saving_calib,
 )
 
 
@@ -508,31 +507,14 @@ class Calibrator:
 
         return "\n".join(lines)
 
-    def save(self, output_dir: str = ".") -> None:
-        """Save Omni_Calib_Results.npz (+ optional .mat) to output_dir."""
+    def export_txt(
+        self, output_dir: str = ".", path: Optional[str] = None
+    ) -> Optional[Path]:
+        """Export the OCamCalib text results; return where they landed."""
         if not self.calibrated:
             print("\nNo calibration data available. You must first calibrate your camera.\n")
-            return
+            return None
 
-        Xp_abs, Yp_abs, ima_proc = self.assemble()
-        saving_calib(
-            self.last_ocam_model,
-            self.RRfin,
-            ima_proc,
-            self.Xt,
-            self.Yt,
-            Xp_abs,
-            Yp_abs,
-            self.taylor_order,
-            output_dir=output_dir,
-        )
-
-    def export_txt(self, output_dir: str = ".") -> None:
-        """Export calib_results.txt (OCamCalib text format) to output_dir."""
-        if not self.calibrated:
-            print("\nNo calibration data available. You must first calibrate your camera.\n")
-            return
-
-        print('Exporting ocam_model to "calib_results.txt"')
-        export_data(self.last_ocam_model, output_dir=output_dir)
+        written = export_data(self.last_ocam_model, output_dir=output_dir, path=path)
         print("done")
+        return written
