@@ -210,8 +210,16 @@ def cam2world(m: np.ndarray, ocam_model: OCamModel) -> np.ndarray:
 #: Defaults for the GUI's forward-facing perspective view. Hardcoded on
 #: purpose (GUI-only visualization with no effect on calibration results);
 #: if adjustability is ever needed, expose these as Tk controls.
-DEFAULT_FORWARD_VIEW_HFOV_DEG = 90.0
 DEFAULT_FORWARD_VIEW_GRID = (120, 90)  # (grid_w, grid_h)
+
+#: Horizontal FOV of the rectilinear forward view. A rectilinear projection
+#: sends a ray at 90 deg off-axis to infinity, and content magnification goes
+#: as 1/tan(hfov/2), so a wide value crushes the pattern into the middle: this
+#: lens's border rays reach 125 deg, and at 160 deg the LED grid renders at
+#: 0.18x. 90 deg keeps the pattern legible, which is the whole point of the
+#: view. Tuning knob: raise toward ~110 to trade magnification for rim, at the
+#: cost of black corners the round image circle cannot fill.
+DEFAULT_FORWARD_VIEW_HFOV_DEG = 90.0
 
 
 def build_forward_view_maps(
@@ -224,8 +232,20 @@ def build_forward_view_maps(
     """
     Build a ``cv2.remap`` LUT for a forward-facing perspective view.
 
-    The view is a rectilinear crop of ``hfov_deg`` horizontal FOV around
-    the model's own optical axis (the ray that ``(xc, yc)`` back-projects
+    This is a calibration *sanity check*: straight lines in the world are
+    bowed by the fisheye and must come out straight here. On this rig the LED
+    grid's per-line collinearity error drops 0.725 px -> 0.157 px through this
+    mapping (``test/test_forward_view.py``).
+
+    ponytail: a rectilinear projection cannot represent rays at or past 90 deg
+    from the axis, so a fisheye's outer rim is always cropped -- no ``hfov_deg``
+    shows the whole frame, and a wide one only shrinks the pattern you are
+    trying to inspect. Showing everything needs a different projection
+    (e.g. equirectangular), which would not straighten lines and so would not
+    serve this check.
+
+    The view is centred on the model's own optical axis (the ray that
+    ``(xc, yc)`` back-projects
     to via :func:`cam2world` -- never an assumed ``[0, 0, +/-1]``, since
     the sign of ``ss[0]`` decides the hemisphere). Because ``world2cam``'s
     root-finding is per-point (not vectorized), the maps are computed on a
@@ -277,8 +297,9 @@ def build_forward_view_maps(
     if float(np.dot(down, down_probe)) < 0:
         down = -down
 
-    # Pinhole-normalized ray offsets over the requested FOV (vertical FOV
-    # derived to preserve the output aspect ratio).
+    # Pinhole-normalized ray offsets. Fitted to the image's own rays by
+    # default; with an explicit hfov the vertical FOV is derived to preserve
+    # the output aspect ratio.
     grid_w, grid_h = grid_size
     half_u = math.tan(math.radians(hfov_deg) / 2.0)
     half_v = half_u * out_height / out_width
@@ -296,7 +317,16 @@ def build_forward_view_maps(
 
     rows = m[0, :].reshape(grid_h, grid_w)
     cols = m[1, :].reshape(grid_h, grid_w)
-    invalid = ~(np.isfinite(rows) & np.isfinite(cols))
+    # Out-of-image coordinates count as invalid, not just non-finite ones: the
+    # view's corners combine the extreme horizontal and vertical rays, a
+    # direction the round source image has no pixels for. Without this, remap
+    # silently samples the border colour there instead of blanking.
+    with np.errstate(invalid="ignore"):
+        inside = (
+            (rows >= 0) & (rows <= ocam_model.height - 1)
+            & (cols >= 0) & (cols <= ocam_model.width - 1)
+        )
+    invalid = ~(np.isfinite(rows) & np.isfinite(cols) & inside)
     rows = np.where(invalid, -1.0, rows).astype(np.float32)
     cols = np.where(invalid, -1.0, cols).astype(np.float32)
 
