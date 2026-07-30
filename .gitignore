@@ -6,3 +6,5 @@ calibrator/
 .superpowers/
 detected_marker_previews/
 doc/superpowers/
+venv/
+.venv/
