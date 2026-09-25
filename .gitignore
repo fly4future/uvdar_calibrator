@@ -9,3 +9,6 @@ doc/superpowers/
 venv/
 .venv/
 opencode.json
+# Personal, unshared: reference screenshots and the running dev log.
+original.png
+worklog.txt
