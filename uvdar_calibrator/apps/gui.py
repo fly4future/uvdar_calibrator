@@ -24,7 +24,7 @@ class so the apps never diverge.
 
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 import queue
 import time
@@ -44,10 +44,11 @@ except Exception:
 
 try:
     import tkinter as tk
-    from tkinter import filedialog, messagebox, ttk
+    from tkinter import filedialog, font as tkfont, messagebox, ttk
 except Exception:  # pragma: no cover - headless environments
     tk = None
     filedialog = None
+    tkfont = None
     messagebox = None
     ttk = None
 
@@ -61,6 +62,77 @@ def _require_gui_deps() -> None:
         raise RuntimeError("Tkinter is required for the GUI. Install python-tk/tkinter.")
     if cv2 is None:
         raise RuntimeError("OpenCV is required. Run: pip install opencv-python")
+
+
+# ---------------------------------------------------------------------------
+# Look and feel
+# ---------------------------------------------------------------------------
+#
+# One palette and one font family for every widget and every canvas drawing.
+# Previously the font name was hardcoded as "Segoe UI" in a dozen places,
+# which silently fell back to whatever Tk defaults to on the Ubuntu images
+# the UAVs run -- so the app looked different on the drone than on the
+# laptop. ``apply_theme`` resolves the family once, from what is actually
+# installed, and hands it to everyone.
+
+#: Font families in preference order. The first *installed* one wins; Tk
+#: falls back silently for a family that isn't there, so probing is the only
+#: way to get a deliberate choice instead of an accidental one.
+UI_FONT_CANDIDATES = (
+    "Segoe UI",
+    "Cantarell",
+    "Ubuntu",
+    "Noto Sans",
+    "DejaVu Sans",
+    "Liberation Sans",
+    "Helvetica",
+)
+
+
+@dataclass(frozen=True)
+class Theme:
+    """Colors plus the resolved font family, shared by widgets and drawings."""
+
+    family: str = "TkDefaultFont"
+    bg: str = "#eef0f3"          # window / panel background
+    surface: str = "#ffffff"     # cards: canvases, text boxes, entry fields
+    border: str = "#cfd4da"
+    text: str = "#1d2125"
+    muted: str = "#6a7178"
+    good: str = "#2e9e4f"
+    bad: str = "#d9534f"
+    image_bg: str = "#202020"    # backdrop behind the camera image
+
+    def font(self, size: int = 9, weight: str = ""):
+        """Font tuple for canvas items, e.g. ``theme.font(10, "bold")``."""
+        return (self.family, size, weight) if weight else (self.family, size)
+
+
+def apply_theme(root) -> Theme:
+    """
+    Install the app-wide ttk style and return the resolved :class:`Theme`.
+
+    "clam" is requested because it is the one built-in theme that honors
+    ``background``/``fieldbackground``, so the flat palette below actually
+    shows up; the native themes on Windows/macOS would ignore most of it.
+    """
+    style = ttk.Style(root)
+    if "clam" in style.theme_names():
+        style.theme_use("clam")
+
+    installed = set(tkfont.families(root))
+    family = next((f for f in UI_FONT_CANDIDATES if f in installed), "TkDefaultFont")
+    theme = Theme(family=family)
+
+    style.configure(".", font=(family, 9), background=theme.bg, foreground=theme.text)
+    style.configure("TFrame", background=theme.bg)
+    style.configure("TLabel", background=theme.bg, foreground=theme.text)
+    style.configure("TCheckbutton", background=theme.bg, foreground=theme.text)
+    style.configure("TButton", padding=(10, 5), background=theme.surface)
+    style.configure("TEntry", fieldbackground=theme.surface, padding=3)
+    style.configure("TSpinbox", fieldbackground=theme.surface, padding=3)
+
+    return theme
 
 
 class _BaseCalibrationApp:
@@ -88,6 +160,7 @@ class _BaseCalibrationApp:
 
         self.root = root
         self.root.title("UV-DAR / OCamCalib Calibration Assistant")
+        self.theme = apply_theme(self.root)
 
         # Fit the window to the screen's work area instead of forcing a fixed
         # 1180x980 that overran smaller displays (pushing the CALIBRATE/SAVE
@@ -151,34 +224,44 @@ class _BaseCalibrationApp:
         top.pack(side=tk.TOP, fill=tk.X)
         self._build_source_controls(top)
 
-        opts = ttk.Frame(self.root, padding=(8, 0, 8, 6))
+        # What stays permanently visible: the source row above, and one button
+        # that reports the LED-grid geometry the app will assume. The three
+        # fields behind it (count x count, pitch) are wrong for nobody who uses
+        # the default board, and the two checkboxes that used to sit here
+        # (MATLAB-style slow Find Center, show plots) were pure expert knobs --
+        # all of them now live in the Advanced Settings dialog.
+        opts = ttk.Frame(self.root, padding=(8, 0, 8, 8))
         opts.pack(side=tk.TOP, fill=tk.X)
         self.board_option_widgets = []
-        ttk.Label(opts, text="Grid squares X:").pack(side=tk.LEFT)
-        w = ttk.Spinbox(opts, from_=1, to=30, textvariable=self.n_sq_x, width=5)
-        w.pack(side=tk.LEFT, padx=4)
-        self.board_option_widgets.append(w)
-        ttk.Label(opts, text="Y:").pack(side=tk.LEFT)
-        w = ttk.Spinbox(opts, from_=1, to=30, textvariable=self.n_sq_y, width=5)
-        w.pack(side=tk.LEFT, padx=4)
-        self.board_option_widgets.append(w)
-        ttk.Label(opts, text="Spacing mm:").pack(side=tk.LEFT, padx=(12, 0))
-        w = ttk.Entry(opts, textvariable=self.spacing_mm, width=7)
-        w.pack(side=tk.LEFT, padx=4)
-        self.board_option_widgets.append(w)
-        ttk.Label(opts, text="Taylor:").pack(side=tk.LEFT, padx=(12, 0))
-        w = ttk.Spinbox(opts, from_=4, to=10, textvariable=self.taylor_order, width=5)
-        w.pack(side=tk.LEFT, padx=4)
-        self.board_option_widgets.append(w)
+
+        self._board_panel_visible = False
+        self.board_button = ttk.Button(
+            opts, text="", command=self._toggle_board_panel
+        )
+        self.board_button.pack(side=tk.LEFT)
         ttk.Button(
             opts, text="Advanced Settings...", command=self._open_advanced_settings
-        ).pack(side=tk.LEFT, padx=(12, 0))
-        ttk.Checkbutton(
-            opts, text="MATLAB-style slow Find Center", variable=self.slow_find_center
-        ).pack(side=tk.LEFT, padx=12)
-        ttk.Checkbutton(
-            opts, text="Show plots after calibration", variable=self.show_plots
-        ).pack(side=tk.LEFT, padx=8)
+        ).pack(side=tk.RIGHT)
+
+        self.board_panel = ttk.Frame(opts, padding=(10, 0, 0, 0))
+        ttk.Label(self.board_panel, text="Grid squares X:").pack(side=tk.LEFT)
+        w = ttk.Spinbox(self.board_panel, from_=1, to=30, textvariable=self.n_sq_x, width=5)
+        w.pack(side=tk.LEFT, padx=4)
+        self.board_option_widgets.append(w)
+        ttk.Label(self.board_panel, text="Y:").pack(side=tk.LEFT)
+        w = ttk.Spinbox(self.board_panel, from_=1, to=30, textvariable=self.n_sq_y, width=5)
+        w.pack(side=tk.LEFT, padx=4)
+        self.board_option_widgets.append(w)
+        ttk.Label(self.board_panel, text="Spacing mm:").pack(side=tk.LEFT, padx=(12, 0))
+        w = ttk.Entry(self.board_panel, textvariable=self.spacing_mm, width=7)
+        w.pack(side=tk.LEFT, padx=4)
+        self.board_option_widgets.append(w)
+
+        # The button doubles as the readout of the current geometry, so a
+        # collapsed panel still tells the user what the app is assuming.
+        for var in (self.n_sq_x, self.n_sq_y, self.spacing_mm):
+            var.trace_add("write", lambda *_a: self._update_board_button())
+        self._update_board_button()
 
         main = ttk.Frame(self.root, padding=8)
         main.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
@@ -196,7 +279,7 @@ class _BaseCalibrationApp:
         right.pack_propagate(False)
 
         self.right_scroll = tk.Canvas(
-            right, highlightthickness=0, background="#ececec"
+            right, highlightthickness=0, background=self.theme.bg
         )
         self.right_scroll.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
         self.right_scrollbar = ttk.Scrollbar(
@@ -227,7 +310,8 @@ class _BaseCalibrationApp:
         )
 
         self.image_canvas = tk.Canvas(
-            left, bg="#202020", highlightthickness=1, highlightbackground="#888"
+            left, bg=self.theme.image_bg,
+            highlightthickness=1, highlightbackground=self.theme.border,
         )
         self.image_canvas.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
 
@@ -252,42 +336,35 @@ class _BaseCalibrationApp:
 
         sidebar = self._right_scroll_frame
 
-        title = ttk.Label(sidebar, text="Calibration Progress", font=("Segoe UI", 14, "bold"))
-        title.pack(anchor="center")
+        ttk.Label(
+            sidebar, text="Calibration Progress", font=self.theme.font(14, "bold")
+        ).pack(anchor="center")
         self.status_label = ttk.Label(
-            sidebar, text="Status: no images analyzed", wraplength=320, justify="center"
+            sidebar, text="No images analyzed yet", wraplength=320, justify="center"
         )
-        self.status_label.pack(anchor="center", pady=(8, 8))
+        self.status_label.pack(anchor="center", pady=(8, 10))
 
         # Four ROS-style range bars: X, Y, Size, Skew.
-        self.bar_canvas = tk.Canvas(
-            sidebar, width=320, height=140, bg="white",
-            highlightthickness=1, highlightbackground="#ccc",
-        )
+        self.bar_canvas = self._card_canvas(sidebar, height=140)
         self.bar_canvas.pack(anchor="center", pady=(0, 10))
         self._draw_bars([])
 
         ttk.Label(
-            sidebar, text="Board position coverage:", font=("Segoe UI", 10, "bold")
+            sidebar, text="Board position coverage", font=self.theme.font(10, "bold")
         ).pack(anchor="center")
-        self.coverage_canvas = tk.Canvas(
-            sidebar, width=320, height=180, bg="white",
-            highlightthickness=1, highlightbackground="#ccc",
-        )
+        self.coverage_canvas = self._card_canvas(sidebar, height=180)
         self.coverage_canvas.pack(anchor="center", pady=(4, 10))
         self._draw_coverage_graph()
 
-        ttk.Label(sidebar, text="Sample log:", font=("Segoe UI", 10, "bold")).pack(anchor="w")
-        self.log_box = tk.Text(sidebar, height=10, width=44, wrap="word")
-        self.log_box.pack(anchor="w", fill=tk.X, pady=(4, 10))
-        self.log_box.configure(state="disabled")
+        ttk.Label(sidebar, text="Sample log", font=self.theme.font(10, "bold")).pack(
+            anchor="w"
+        )
+        self.log_box = self._text_card(sidebar, height=10)
 
         ttk.Label(
-            sidebar, text="Next images to capture:", font=("Segoe UI", 10, "bold")
+            sidebar, text="Next images to capture", font=self.theme.font(10, "bold")
         ).pack(anchor="w")
-        self.suggestion_box = tk.Text(sidebar, height=6, width=44, wrap="word")
-        self.suggestion_box.pack(anchor="w", fill=tk.X, pady=(4, 10))
-        self.suggestion_box.configure(state="disabled")
+        self.suggestion_box = self._text_card(sidebar, height=6)
 
         actions = ttk.Frame(right)
         actions.pack(side=tk.BOTTOM, fill=tk.X)
@@ -300,8 +377,80 @@ class _BaseCalibrationApp:
         )
         self.save_button.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(4, 0))
 
-        self.bottom_status = ttk.Label(self.root, text="", relief=tk.SUNKEN, anchor="w", padding=4)
+        # A hairline plus muted text instead of a sunken groove: the status
+        # line is the app's only persistent feedback surface, so it should
+        # read as a quiet strip rather than a second toolbar.
+        ttk.Separator(self.root).pack(side=tk.BOTTOM, fill=tk.X)
+        self.bottom_status = ttk.Label(
+            self.root, text="", anchor="w", padding=(10, 4),
+            foreground=self.theme.muted,
+        )
         self.bottom_status.pack(side=tk.BOTTOM, fill=tk.X)
+
+    def _card_canvas(self, parent, height: int):
+        """A white drawing surface that matches the rest of the palette."""
+        return tk.Canvas(
+            parent, width=320, height=height,
+            background=self.theme.surface, highlightthickness=1,
+            highlightbackground=self.theme.border,
+        )
+
+    def _text_card(self, parent, height: int, pady=(4, 10)):
+        """
+        A flat, scrollable read-only text card, already packed.
+
+        The log and the suggestions are plain ``tk.Text``, which by default
+        brings its own 3D border and a white background that clashes with the
+        surrounding cards; styling them here keeps both identical and gives
+        the log a scrollbar it previously lacked. The card *frame* is what
+        gets packed -- returning the Text to pack instead would leave it
+        inside an unmanaged frame, and it would never be displayed.
+        """
+        card = tk.Frame(parent, background=self.theme.border)
+        card.pack(anchor="w", fill=tk.X, pady=pady)
+        text = tk.Text(
+            card, height=height, width=44, wrap="word",
+            background=self.theme.surface, foreground=self.theme.text,
+            font=self.theme.font(9), relief=tk.FLAT, borderwidth=1,
+            highlightthickness=0, padx=6, pady=4, spacing1=1, spacing3=1,
+            state="disabled",
+        )
+        scrollbar = ttk.Scrollbar(card, orient="vertical", command=text.yview)
+        text.configure(yscrollcommand=scrollbar.set)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        return text
+
+    def _toggle_board_panel(self):
+        """Show/hide the LED-grid fields (grid size, pitch) behind one button."""
+        self._board_panel_visible = not self._board_panel_visible
+        if self._board_panel_visible:
+            self.board_panel.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        else:
+            self.board_panel.pack_forget()
+        self._update_board_button()
+
+    def _update_board_button(self):
+        """
+        Label the toggle with the geometry it represents.
+
+        A bare "Settings" button would leave the user guessing which board the
+        app is assuming; showing "7 x 5, 15 mm" means the default works for
+        everybody and the button only matters to somebody whose board differs.
+        """
+        try:
+            text = (
+                f"LED grid: {self.n_sq_x.get()} x {self.n_sq_y.get()}, "
+                f"{self.spacing_mm.get():g} mm spacing"
+            )
+        except tk.TclError:
+            # Mid-edit in the spinbox ("" or "1e"): keep the old label.
+            return
+        # Wording rather than a triangle glyph: U+25B8/U+25BE are missing from
+        # some of the candidate UI fonts, and a tofu box on the one button that
+        # reveals the settings is worse than no arrow at all.
+        action = "hide" if self._board_panel_visible else "change"
+        self.board_button.configure(text=f"{text}  ({action})")
 
     def _on_mousewheel(self, event):
         # Only scroll when the pointer is over the sidebar's scroll region,
@@ -320,12 +469,12 @@ class _BaseCalibrationApp:
 
     def _open_advanced_settings(self):
         """
-        Modal dialog for the CalibratorConfig fields that aren't
-        always-visible widgets: fov_radius_frac, sample_threshold,
-        param_ranges (X/Y/Size/Skew), min_db_size, max_accepted_samples,
-        save_previews_for_rejected. Editable in batch mode; read-only in
-        live mode, where the running Calibrator can't be reconfigured
-        mid-capture (see self._advanced_settings_read_only).
+        Modal dialog for the settings that are not on the main window:
+        taylor_order, fov_radius_frac, sample_threshold, param_ranges
+        (X/Y/Size/Skew), min_db_size, max_accepted_samples,
+        save_previews_for_rejected, slow_find_center, show_plots. Editable in
+        batch mode; read-only in live mode, where the running Calibrator can't
+        be reconfigured mid-capture (see self._advanced_settings_read_only).
         """
         cfg = self.calib_config
         read_only = self._advanced_settings_read_only
@@ -339,6 +488,12 @@ class _BaseCalibrationApp:
         body.pack(fill=tk.BOTH, expand=True)
 
         interactive_widgets = []
+        # Tcl variables are deleted when the last Python reference to their
+        # StringVar goes away, and an Entry only stores the variable *name*, so
+        # a collected StringVar leaves the field rendering empty. In editable
+        # mode the _save closure happens to keep them alive; in read-only (live)
+        # mode nothing does, hence this explicit list.
+        dialog_vars = []
 
         def _fmt(value):
             return "" if value is None else str(value)
@@ -349,12 +504,19 @@ class _BaseCalibrationApp:
             entry = ttk.Entry(body, textvariable=var, width=10)
             entry.grid(row=row, column=1, sticky="w", padx=6)
             interactive_widgets.append(entry)
+            dialog_vars.append(var)
             ttk.Label(
-                body, text=hint, font=("Segoe UI", 8), foreground="#666",
+                body, text=hint, font=self.theme.font(8), foreground=self.theme.muted,
             ).grid(row=row, column=2, sticky="w")
             return var
 
         row = 0
+
+        taylor_var = _labeled_entry(
+            row, "Taylor order:", self.taylor_order.get(),
+            "polynomial degree of the omnidirectional model; 4 is the OCamCalib default",
+        )
+        row += 1
 
         fov_var = _labeled_entry(
             row, "FOV radius fraction:", cfg.fov_radius_frac,
@@ -380,6 +542,7 @@ class _BaseCalibrationApp:
             entry.pack(side=tk.LEFT, padx=(2, 8))
             interactive_widgets.append(entry)
             range_vars.append(v)
+            dialog_vars.append(v)
         row += 1
 
         min_db_var = _labeled_entry(
@@ -402,6 +565,29 @@ class _BaseCalibrationApp:
         interactive_widgets.append(save_previews_check)
         row += 1
 
+        # These two used to be checkbuttons on the main window, where they sat
+        # next to the capture controls looking like everyday options. They only
+        # matter when a solve misbehaves, so they live here now.
+        slow_center_var = tk.BooleanVar(value=self.slow_find_center.get())
+        slow_center_check = ttk.Checkbutton(
+            body, text="MATLAB-style slow Find Center (slower, more accurate)",
+            variable=slow_center_var,
+        )
+        slow_center_check.grid(row=row, column=0, columnspan=3, sticky="w")
+        interactive_widgets.append(slow_center_check)
+        row += 1
+
+        show_plots_var = tk.BooleanVar(value=self.show_plots.get())
+        show_plots_check = ttk.Checkbutton(
+            body, text="Show diagnostics plots after calibration", variable=show_plots_var,
+        )
+        show_plots_check.grid(row=row, column=0, columnspan=3, sticky="w")
+        interactive_widgets.append(show_plots_check)
+        row += 1
+
+        dialog_vars += [save_previews_var, slow_center_var, show_plots_var]
+        self._dialog_vars = dialog_vars
+
         if read_only:
             for widget in interactive_widgets:
                 widget.configure(state="disabled")
@@ -411,7 +597,7 @@ class _BaseCalibrationApp:
                     "Read-only: this live session's Calibrator is already running "
                     "and can't be reconfigured mid-capture."
                 ),
-                font=("Segoe UI", 8, "italic"), foreground="#a00", wraplength=360,
+                font=self.theme.font(8, "italic"), foreground=self.theme.bad, wraplength=360,
             ).grid(row=row, column=0, columnspan=3, sticky="w", pady=(10, 0))
             row += 1
 
@@ -426,6 +612,10 @@ class _BaseCalibrationApp:
         else:
             def _save():
                 try:
+                    taylor_order = int(taylor_var.get().strip())
+                    if not 4 <= taylor_order <= 10:
+                        raise ValueError("Taylor order must be between 4 and 10.")
+
                     fov_text = fov_var.get().strip()
                     fov_radius_frac = None
                     if fov_text:
@@ -459,6 +649,7 @@ class _BaseCalibrationApp:
 
                 self.calib_config = replace(
                     self.calib_config,
+                    taylor_order=taylor_order,
                     fov_radius_frac=fov_radius_frac,
                     sample_threshold=sample_threshold,
                     param_ranges=param_ranges,
@@ -466,6 +657,13 @@ class _BaseCalibrationApp:
                     max_accepted_samples=max_accepted_samples,
                     save_previews_for_rejected=save_previews_var.get(),
                 )
+                # The board/taylor widgets are gone from the main window, so the
+                # dialog is the only place these live now; keep the IntVars in
+                # sync because load_images() re-reads them when it builds the
+                # Calibrator.
+                self.taylor_order.set(taylor_order)
+                self.slow_find_center.set(slow_center_var.get())
+                self.show_plots.set(show_plots_var.get())
                 dialog.destroy()
 
             ttk.Button(actions, text="Cancel", command=_close).pack(side=tk.LEFT, padx=(0, 6))
@@ -541,7 +739,7 @@ class _BaseCalibrationApp:
     def _progress_color(self, p: float) -> str:
         """Return the bar color: red -> yellow by progress, green when complete."""
         if p >= 1.0:
-            return "#2e9e4f"
+            return self.theme.good
         # interpolate red (low) to yellow (high)
         r1, g1, b1 = (0xd9, 0x53, 0x4f)
         r2, g2, b2 = (0xe0, 0xb6, 0x42)
@@ -569,8 +767,10 @@ class _BaseCalibrationApp:
         rows = progress if progress else [(name, 0.0, 0.0, 0.0) for name in coverage.PARAM_NAMES]
 
         for name, lo, hi, p in rows:
-            c.create_text(10, y, text=name, anchor="w", font=("Segoe UI", 9, "bold"))
-            c.create_rectangle(x0, y - 8, x1, y + 8, outline="#999", fill="#eee")
+            c.create_text(10, y, text=name, anchor="w", font=self.theme.font(9, "bold"))
+            c.create_rectangle(
+                x0, y - 8, x1, y + 8, outline=self.theme.border, fill="#f0f1f3"
+            )
             lo_c = max(0.0, min(1.0, lo))
             hi_c = max(0.0, min(1.0, hi))
             if hi_c > lo_c:
@@ -582,7 +782,10 @@ class _BaseCalibrationApp:
                     outline="",
                     fill=self._progress_color(p),
                 )
-            c.create_text(x1 + 10, y, text=f"{100.0 * p:.0f}%", anchor="w", font=("Segoe UI", 9))
+            c.create_text(
+                x1 + 10, y, text=f"{100.0 * p:.0f}%", anchor="w",
+                font=self.theme.font(9), fill=self.theme.text,
+            )
             y += 32
 
     def _skew_color(self, skew: float) -> str:
@@ -615,32 +818,44 @@ class _BaseCalibrationApp:
         x0, y0 = margin_left, margin
         x1, y1 = width - margin, height - margin
 
-        c.create_rectangle(x0, y0, x1, y1, outline="#999", fill="#fafafa")
+        c.create_rectangle(
+            x0, y0, x1, y1, outline=self.theme.border, fill="#fafbfc"
+        )
         for frac in (1 / 3, 2 / 3):
             x = x0 + frac * (x1 - x0)
             y = y0 + frac * (y1 - y0)
-            c.create_line(x, y0, x, y1, fill="#ddd", dash=(3, 3))
-            c.create_line(x0, y, x1, y, fill="#ddd", dash=(3, 3))
+            c.create_line(x, y0, x, y1, fill="#e3e6ea", dash=(3, 3))
+            c.create_line(x0, y, x1, y, fill="#e3e6ea", dash=(3, 3))
 
-        c.create_text((x0 + x1) / 2, y1 + 8, text="left → right (X)", font=("Segoe UI", 7))
+        c.create_text(
+            (x0 + x1) / 2, y1 + 9, text="left \u2192 right (X)",
+            font=self.theme.font(8), fill=self.theme.muted,
+        )
         # anchor="w" at a fixed small x keeps this inside the canvas -- centering
         # it under x0 (as before) could push its bbox to a negative x and clip it.
         c.create_text(
-            4, (y0 + y1) / 2, text="top\n↓\nbtm", font=("Segoe UI", 6),
-            justify="center", anchor="w",
+            3, (y0 + y1) / 2, text="top\n\u2193\nbtm", font=self.theme.font(8),
+            justify="center", anchor="w", fill=self.theme.muted,
         )
 
         # Skew color legend, top-left.
         c.create_oval(x0 + 2, 2, x0 + 10, 10, outline="", fill=self._skew_color(0.0))
-        c.create_text(x0 + 13, 6, text="low skew", anchor="w", fill="#333", font=("Segoe UI", 7))
-        c.create_oval(x0 + 68, 2, x0 + 76, 10, outline="", fill=self._skew_color(1.0))
-        c.create_text(x0 + 79, 6, text="high skew", anchor="w", fill="#333", font=("Segoe UI", 7))
+        c.create_text(
+            x0 + 14, 6, text="low skew", anchor="w",
+            fill=self.theme.muted, font=self.theme.font(8),
+        )
+        c.create_oval(x0 + 72, 2, x0 + 80, 10, outline="", fill=self._skew_color(1.0))
+        c.create_text(
+            x0 + 84, 6, text="high skew", anchor="w",
+            fill=self.theme.muted, font=self.theme.font(8),
+        )
 
         cal = self.calibrator
         if cal is None or not cal.db:
             c.create_text(
                 (x0 + x1) / 2, (y0 + y1) / 2,
-                text="No accepted samples yet", fill="#777", font=("Segoe UI", 9),
+                text="No accepted samples yet", fill=self.theme.muted,
+                font=self.theme.font(9),
             )
             return
 
@@ -667,12 +882,13 @@ class _BaseCalibrationApp:
             gy = y0 + guide["y"] * (y1 - y0)
             c.create_oval(gx - 10, gy - 10, gx + 10, gy + 10, outline="#00a6a6", width=3)
             c.create_text(
-                gx, gy - 18, text="next", fill="#008080", font=("Segoe UI", 7, "bold"),
+                gx, gy - 18, text="next", fill="#008080",
+                font=self.theme.font(8, "bold"),
             )
 
         c.create_text(
             x1, 6, text=f"{len(cal.db)} accepted",
-            anchor="ne", fill="#333", font=("Segoe UI", 8),
+            anchor="ne", fill=self.theme.muted, font=self.theme.font(8),
         )
 
     # ------------------------------------------------------------------
