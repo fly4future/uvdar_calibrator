@@ -34,7 +34,7 @@ from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 import sensor_msgs.msg
 
-from ..engine.detection import find_image_files
+from ..engine.detection import find_image_files, is_preview_dir, preview_dir_explanation
 
 DEFAULT_RATE_HZ = 5.0
 
@@ -133,6 +133,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     own_args = [a for a in argv if a not in ros_args]
 
     args = _build_arg_parser().parse_args(own_args)
+
+    if is_preview_dir(args.image_dir):
+        # find_image_files now skips these, so without this the only symptom
+        # would be a bare "no images found" for a folder that plainly has
+        # plenty of images in it.
+        print(preview_dir_explanation(args.image_dir), file=sys.stderr)
+        return 1
 
     files = find_image_files(args.image_dir, args.base_name, args.extension)
     if not files:
