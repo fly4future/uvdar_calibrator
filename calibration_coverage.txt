@@ -1,0 +1,42 @@
+Accepted samples: 23
+X     [########################] lo=0.13 hi=0.91 progress=100%
+Y     [########################] lo=0.04 hi=0.85 progress=100%
+Size  [########################] lo=0.00 hi=0.42 progress=100%
+Skew  [########################] lo=0.00 hi=0.91 progress=100%
+Status: ready to calibrate.
+
+Supplementary coverage hints (bin classification of ACCEPTED samples).
+Note: near-duplicate images are rejected before reaching this report;
+readiness is judged by the X/Y/Size/Skew range progress, not these bins.
+x position  [########################] 3/3
+y position  [########################] 3/3
+size        [########################] 3/3
+tilt        [########################] 2/2
+quadrants   [########################] 4/4
+All coverage bins are represented.
+
+Per-sample coverage metrics:
+sample,x_bin,y_bin,size_bin,tilt_bin,x_norm,y_norm,size,tilt
+example_01.bmp,center,middle,far/small,front-on,0.565,0.508,0.091,0.003
+example_03.bmp,right,middle,far/small,front-on,0.786,0.541,0.106,0.117
+example_04.bmp,right,middle,far/small,front-on,0.839,0.535,0.099,0.036
+example_05.bmp,right,middle,far/small,front-on,0.880,0.513,0.087,0.025
+example_06.bmp,left,middle,far/small,moderately tilted,0.210,0.535,0.106,0.152
+example_07.bmp,left,middle,far/small,front-on,0.189,0.540,0.113,0.039
+example_08.bmp,left,middle,far/small,front-on,0.151,0.439,0.077,0.110
+example_09.bmp,center,top,medium,front-on,0.479,0.198,0.155,0.029
+example_10.bmp,center,top,far/small,moderately tilted,0.445,0.112,0.133,0.233
+example_11.bmp,center,bottom,medium,front-on,0.526,0.746,0.154,0.044
+example_13.bmp,left,top,far/small,moderately tilted,0.262,0.224,0.113,0.282
+example_14.bmp,left,top,far/small,moderately tilted,0.241,0.219,0.113,0.246
+example_15.bmp,left,top,far/small,front-on,0.222,0.218,0.106,0.128
+example_17.bmp,center,middle,close/large,front-on,0.541,0.507,0.446,0.001
+example_18.bmp,right,top,far/small,moderately tilted,0.755,0.280,0.097,0.164
+example_19.bmp,right,top,far/small,moderately tilted,0.743,0.150,0.110,0.241
+example_20.bmp,right,bottom,far/small,strongly tilted,0.798,0.756,0.142,0.374
+example_21.bmp,right,bottom,medium,moderately tilted,0.725,0.691,0.192,0.181
+example_22.bmp,left,bottom,medium,strongly tilted,0.267,0.777,0.197,0.432
+example_23.bmp,left,bottom,medium,moderately tilted,0.283,0.733,0.264,0.331
+example_24.bmp,center,middle,medium,front-on,0.405,0.559,0.180,0.059
+example_25.bmp,right,bottom,medium,front-on,0.740,0.686,0.204,0.087
+example_26.bmp,left,middle,medium,moderately tilted,0.239,0.668,0.313,0.335

@@ -17,3 +17,8 @@ config/basler/session.yaml
 config/libcamera/camera_custom_config.yaml
 config/libcamera/camera_calib.yaml
 config/libcamera/session.yaml
+
+# Personal, unshared
+opencode.json
+original.png
+worklog.txt
