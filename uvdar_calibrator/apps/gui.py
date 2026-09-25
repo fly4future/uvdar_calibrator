@@ -88,8 +88,18 @@ class _BaseCalibrationApp:
 
         self.root = root
         self.root.title("UV-DAR / OCamCalib Calibration Assistant")
-        self.root.geometry("1180x980")
-        self.root.minsize(1000, 870)
+
+        # Fit the window to the screen's work area instead of forcing a fixed
+        # 1180x980 that overran smaller displays (pushing the CALIBRATE/SAVE
+        # buttons off the bottom). Bounded by the design size on large screens,
+        # by the available screen on small ones.
+        screen_w = max(100, root.winfo_screenwidth())
+        screen_h = max(100, root.winfo_screenheight())
+        design_w, design_h = 1180, 980
+        w = min(design_w, screen_w - 40)
+        h = min(design_h, screen_h - 60)
+        self.root.geometry(f"{w}x{h}")
+        self.root.minsize(860, min(600, h))
 
         self.n_sq_x = tk.IntVar(value=board.n_sq_x)
         self.n_sq_y = tk.IntVar(value=board.n_sq_y)
@@ -175,8 +185,46 @@ class _BaseCalibrationApp:
 
         left = ttk.Frame(main)
         left.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        # The right sidebar's fixed-height content (range bars, coverage
+        # graph, log, suggestions) can exceed a short screen. It is therefore
+        # wrapped in a scrollable region, while the CALIBRATE / SAVE-EXPORT
+        # button row is pinned below it (outside the scroll region) so the
+        # buttons are ALWAYS visible regardless of window height.
         right = ttk.Frame(main, width=340)
-        right.pack(side=tk.RIGHT, fill=tk.Y, padx=(10, 0))
+        right.pack(side=tk.RIGHT, fill=tk.BOTH, padx=(10, 0))
+        right.pack_propagate(False)
+
+        self.right_scroll = tk.Canvas(
+            right, highlightthickness=0, background="#ececec"
+        )
+        self.right_scroll.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+        self.right_scrollbar = ttk.Scrollbar(
+            right, orient="vertical", command=self.right_scroll.yview
+        )
+        self.right_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self.right_scroll.configure(yscrollcommand=self.right_scrollbar.set)
+        self._right_scroll_frame = ttk.Frame(self.right_scroll)
+        self._right_scroll_window = self.right_scroll.create_window(
+            (0, 0), window=self._right_scroll_frame, anchor="nw"
+        )
+        self._right_scroll_frame.bind(
+            "<Configure>",
+            lambda _e: self.right_scroll.configure(
+                scrollregion=self.right_scroll.bbox("all")
+            ),
+        )
+        self.right_scroll.bind(
+            "<Configure>",
+            lambda e: self.right_scroll.itemconfigure(
+                self._right_scroll_window, width=e.width
+            ),
+        )
+        self.right_scroll.bind_all(
+            "<MouseWheel>",
+            lambda e: self._on_mousewheel(e),
+            add="+",
+        )
 
         self.image_canvas = tk.Canvas(
             left, bg="#202020", highlightthickness=1, highlightbackground="#888"
@@ -202,40 +250,42 @@ class _BaseCalibrationApp:
         self.image_label = ttk.Label(nav, text="No accepted sample loaded")
         self.image_label.pack(side=tk.LEFT, padx=12)
 
-        title = ttk.Label(right, text="Calibration Progress", font=("Segoe UI", 14, "bold"))
+        sidebar = self._right_scroll_frame
+
+        title = ttk.Label(sidebar, text="Calibration Progress", font=("Segoe UI", 14, "bold"))
         title.pack(anchor="center")
         self.status_label = ttk.Label(
-            right, text="Status: no images analyzed", wraplength=320, justify="center"
+            sidebar, text="Status: no images analyzed", wraplength=320, justify="center"
         )
         self.status_label.pack(anchor="center", pady=(8, 8))
 
         # Four ROS-style range bars: X, Y, Size, Skew.
         self.bar_canvas = tk.Canvas(
-            right, width=320, height=140, bg="white",
+            sidebar, width=320, height=140, bg="white",
             highlightthickness=1, highlightbackground="#ccc",
         )
         self.bar_canvas.pack(anchor="center", pady=(0, 10))
         self._draw_bars([])
 
         ttk.Label(
-            right, text="Board position coverage:", font=("Segoe UI", 10, "bold")
+            sidebar, text="Board position coverage:", font=("Segoe UI", 10, "bold")
         ).pack(anchor="center")
         self.coverage_canvas = tk.Canvas(
-            right, width=320, height=180, bg="white",
+            sidebar, width=320, height=180, bg="white",
             highlightthickness=1, highlightbackground="#ccc",
         )
         self.coverage_canvas.pack(anchor="center", pady=(4, 10))
         self._draw_coverage_graph()
 
-        ttk.Label(right, text="Sample log:", font=("Segoe UI", 10, "bold")).pack(anchor="w")
-        self.log_box = tk.Text(right, height=10, width=44, wrap="word")
-        self.log_box.pack(anchor="w", fill=tk.BOTH, expand=True, pady=(4, 10))
+        ttk.Label(sidebar, text="Sample log:", font=("Segoe UI", 10, "bold")).pack(anchor="w")
+        self.log_box = tk.Text(sidebar, height=10, width=44, wrap="word")
+        self.log_box.pack(anchor="w", fill=tk.X, pady=(4, 10))
         self.log_box.configure(state="disabled")
 
         ttk.Label(
-            right, text="Next images to capture:", font=("Segoe UI", 10, "bold")
+            sidebar, text="Next images to capture:", font=("Segoe UI", 10, "bold")
         ).pack(anchor="w")
-        self.suggestion_box = tk.Text(right, height=6, width=44, wrap="word")
+        self.suggestion_box = tk.Text(sidebar, height=6, width=44, wrap="word")
         self.suggestion_box.pack(anchor="w", fill=tk.X, pady=(4, 10))
         self.suggestion_box.configure(state="disabled")
 
@@ -252,6 +302,21 @@ class _BaseCalibrationApp:
 
         self.bottom_status = ttk.Label(self.root, text="", relief=tk.SUNKEN, anchor="w", padding=4)
         self.bottom_status.pack(side=tk.BOTTOM, fill=tk.X)
+
+    def _on_mousewheel(self, event):
+        # Only scroll when the pointer is over the sidebar's scroll region,
+        # so the image canvas (which shows Previous/Next-bound samples) isn't
+        # hijacked by the wheel.
+        try:
+            x = self.right_scroll.winfo_pointerx() - self.root.winfo_rootx()
+            y = self.right_scroll.winfo_pointery() - self.root.winfo_rooty()
+        except Exception:
+            return
+        if not (0 <= x <= self.right_scroll.winfo_width() and
+                0 <= y <= self.right_scroll.winfo_height()):
+            return
+        delta = int(-1 * (event.delta / 120))
+        self.right_scroll.yview_scroll(delta, "units")
 
     def _open_advanced_settings(self):
         """
