@@ -64,6 +64,7 @@ from .cli import add_sample_selection_args, sample_selection_config_kwargs
 from .gui import launch_live_gui
 from ..engine.board import LedGridBoard
 from ..engine.calibrator import Calibrator, CalibratorConfig
+from ..engine.detection import PREVIEW_DIR_NAME
 
 DEFAULT_RATE_HZ = 2.0
 # A live session has no natural stopping point the way a folder of photos
@@ -354,7 +355,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     )
     config = CalibratorConfig(
         taylor_order=args.taylor_order,
-        preview_dir=str(Path(args.output_dir) / "detected_marker_previews"),
+        preview_dir=str(Path(args.output_dir) / PREVIEW_DIR_NAME),
         # A live stream produces an endless supply of detected-but-rejected
         # near-duplicates; only write preview files for accepted samples.
         save_previews_for_rejected=False,

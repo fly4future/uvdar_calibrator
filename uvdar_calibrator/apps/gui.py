@@ -35,7 +35,13 @@ from ..engine import coverage
 from ..engine import ocam_model
 from ..engine.board import LedGridBoard
 from ..engine.calibrator import Calibrator, CalibratorConfig
-from ..engine.detection import find_image_files, read_image_gray
+from ..engine.detection import (
+    PREVIEW_DIR_NAME,
+    find_image_files,
+    is_preview_dir,
+    preview_dir_explanation,
+    read_image_gray,
+)
 
 try:
     import cv2
@@ -1292,8 +1298,21 @@ class BatchCalibrationApp(_BaseCalibrationApp):
 
     def load_images(self):
         try:
+            image_dir = self.image_dir.get()
+            if is_preview_dir(image_dir):
+                # This folder holds the detector's own annotated output. Both
+                # symptoms the guard exists for are visible from the window --
+                # almost nothing gets accepted, and every preview shows the
+                # markers twice -- so refuse before burning a minute of
+                # detection on it.
+                messagebox.showerror(
+                    "Wrong folder: this is the preview output",
+                    preview_dir_explanation(image_dir),
+                )
+                return
+
             files = find_image_files(
-                self.image_dir.get(),
+                image_dir,
                 self.base_name.get(),
                 self.extension.get(),
             )
@@ -1313,7 +1332,7 @@ class BatchCalibrationApp(_BaseCalibrationApp):
             run_config = replace(
                 self.calib_config,
                 taylor_order=int(self.taylor_order.get()),
-                preview_dir=str(Path(self.image_dir.get()) / "detected_marker_previews"),
+                preview_dir=str(Path(image_dir) / PREVIEW_DIR_NAME),
             )
             self.calibrator = Calibrator(board, run_config)
             # New Calibrator: a coincidentally equal db length must not serve

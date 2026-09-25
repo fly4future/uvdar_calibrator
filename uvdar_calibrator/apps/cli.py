@@ -19,7 +19,13 @@ from typing import Optional, Sequence
 from ..engine import coverage
 from ..engine.board import LedGridBoard
 from ..engine.calibrator import Calibrator, CalibratorConfig
-from ..engine.detection import find_image_files, read_image_gray
+from ..engine.detection import (
+    PREVIEW_DIR_NAME,
+    find_image_files,
+    is_preview_dir,
+    preview_dir_explanation,
+    read_image_gray,
+)
 
 
 def add_sample_selection_args(p: argparse.ArgumentParser) -> None:
@@ -218,6 +224,14 @@ def run(
     show_coverage: bool = False,
 ) -> Optional[Calibrator]:
     """Non-GUI workflow: feed photos one-by-one into a Calibrator, then solve."""
+    if is_preview_dir(image_dir):
+        # Every image in here is an annotated detector output. Analyzing it
+        # "works" in the sense that it doesn't crash, but the drawn-on markers
+        # wreck detection and the sample set collapses, so say what happened
+        # instead of reporting a mysterious handful of accepted samples.
+        print(preview_dir_explanation(image_dir))
+        return None
+
     files = find_image_files(image_dir, base_name, extension)
 
     if not files:
@@ -235,7 +249,7 @@ def run(
     board = board or LedGridBoard()
     run_config = replace(
         config or CalibratorConfig(),
-        preview_dir=str(Path(image_dir) / "detected_marker_previews"),
+        preview_dir=str(Path(image_dir) / PREVIEW_DIR_NAME),
     )
     cal = Calibrator(board, run_config)
 
