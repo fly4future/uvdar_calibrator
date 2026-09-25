@@ -23,6 +23,48 @@ except Exception:
     cv2 = None
 
 
+#: Name of the folder the calibrator writes its per-image detection previews
+#: into, always *inside* the image folder it was pointed at. Those files are
+#: output, never input -- see :func:`is_preview_dir`.
+PREVIEW_DIR_NAME = "detected_marker_previews"
+
+
+def is_preview_dir(path) -> bool:
+    """
+    True if ``path`` is, or lives inside, a detection-preview output folder.
+
+    Previews are rendered images with the detected marker circles and their
+    index numbers *already drawn on them*, so feeding them back in as
+    calibration photos produces two failures at once: the bright-dot detector
+    chokes on the drawn-over pixels (only a handful of images survive, and the
+    sample database comes out far too small to calibrate from), and the GUI
+    overlay draws a second set of circles and numbers on top of the ones that
+    are already in the picture. The folder also re-creates itself one level
+    deeper on every run. Callers use this to refuse the folder outright with a
+    message that names the mistake, rather than silently returning a nearly
+    empty sample set.
+    """
+    return PREVIEW_DIR_NAME in {part.lower() for part in Path(path).parts}
+
+
+def preview_dir_explanation(image_dir) -> str:
+    """
+    The message shown when the calibrator is pointed at its own output folder.
+
+    Kept next to :func:`is_preview_dir` so the GUI and the CLI say the same
+    thing, and so the wording can explain *why* the run looks broken (a tiny
+    sample database, markers drawn twice) instead of only what was wrong.
+    """
+    return (
+        f"{image_dir!r} is a '{PREVIEW_DIR_NAME}' folder -- the detector's own "
+        "output, not your photos. The images in it already have marker circles "
+        "and their index numbers drawn on them, so the bright-dot detector "
+        "fails on most of them (a handful of samples instead of the full set) "
+        "and the preview overlay draws a second set of markers on top of the "
+        "first. Pick the folder that holds the original photos instead."
+    )
+
+
 def _normalize_extension(extension: str) -> List[str]:
     ext = extension.lower().strip().lstrip(".")
 
@@ -54,6 +96,12 @@ def find_image_files(
 
     If base_name is provided, only files starting with that base name are loaded.
     If extension is provided as something other than "all" or "*", only that type is loaded.
+
+    Files inside a :data:`PREVIEW_DIR_NAME` folder are always skipped: those are
+    this tool's own annotated outputs, not calibration photos (see
+    :func:`is_preview_dir`). Non-recursive globbing already keeps the usual
+    case out, but an explicit filter means pointing the app at a preview folder
+    can never quietly yield its own output as input.
     """
     exts = _normalize_extension(extension)
     files: List[str] = []
@@ -66,6 +114,8 @@ def find_image_files(
 
         files.extend(glob.glob(str(Path(image_dir) / pattern)))
         files.extend(glob.glob(str(Path(image_dir) / pattern.upper())))
+
+    files = [f for f in files if not is_preview_dir(f)]
 
     return sorted(set(files), key=lambda p: (Path(p).suffix.lower(), Path(p).name.lower()))
 
