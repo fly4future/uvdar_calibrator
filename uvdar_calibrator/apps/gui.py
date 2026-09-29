@@ -166,6 +166,7 @@ class _BaseCalibrationApp:
         config: CalibratorConfig | None = None,
         output_dir: str = ".",
         slow_find_center: bool = False,
+        dev_mode: bool = False,
     ):
         board = board or LedGridBoard()
         config = config or CalibratorConfig()
@@ -208,6 +209,14 @@ class _BaseCalibrationApp:
         self.show_plots = tk.BooleanVar(value=False)
         self.forward_view_var = tk.BooleanVar(value=False)
 
+        # Dev mode hides everything that is diagnostic rather than actionable:
+        # the bars keep whatever they were drawing and the log keeps its history.
+        self.dev_mode = bool(dev_mode)
+        # (parent, [(widget, pack_kwargs, dev_only), ...]) in display order.
+        # Toggling re-packs each row from scratch in this order, because pack()
+        # appends to a parent's stacking order 
+        self._layout_rows = []
+
         self.calibrator: Calibrator | None = None
         self.current_sample_index = 0
         # The position guide is drawn on every rendered preview frame but only
@@ -222,6 +231,47 @@ class _BaseCalibrationApp:
         self._build_widgets()
         self.root.bind("<Left>", lambda _e: self.prev_sample())
         self.root.bind("<Right>", lambda _e: self.next_sample())
+        self.root.bind("<Control-d>", lambda _e: self._toggle_dev_mode())
+        self.root.bind("<Control-D>", lambda _e: self._toggle_dev_mode())
+
+    # ------------------------------------------------------------------
+    # Dev mode
+    # ------------------------------------------------------------------
+
+    def _register_row(self, parent, items) -> None:
+        """
+        Record one parent's child order, then pack it.
+
+        ``items`` is ``[(widget, pack_kwargs, dev_only), ...]`` in the order the
+        widgets should appear. Marking a widget dev-only hides it unless
+        ``self.dev_mode``; see ``_layout_rows``.
+        """
+        self._layout_rows.append((parent, items))
+        self._pack_row(parent, items)
+
+    def _pack_row(self, parent, items) -> None:
+        for widget, pack_kwargs, dev_only in items:
+            widget.pack_forget()
+            if dev_only and not self.dev_mode:
+                continue
+            widget.pack(**pack_kwargs)
+
+    def _apply_dev_mode(self) -> None:
+        for parent, items in self._layout_rows:
+            self._pack_row(parent, items)
+        self.dev_button.configure(
+            text=("Hide dev" if self.dev_mode else "Dev"),
+            style=("Dev.TButton" if self.dev_mode else "TButton"),
+        )
+        self._update_progress_panel()
+
+    def _toggle_dev_mode(self) -> None:
+        self.dev_mode = not self.dev_mode
+        self._apply_dev_mode()
+        self._set_status(
+            f"Dev mode {'on' if self.dev_mode else 'off'} "
+            f"(Ctrl+D toggles)."
+        )
 
     # ------------------------------------------------------------------
     # Widgets
@@ -242,8 +292,11 @@ class _BaseCalibrationApp:
         # the default board, and the two checkboxes that used to sit here
         # (MATLAB-style slow Find Center, show plots) were pure expert knobs --
         # all of them now live in the Advanced Settings dialog.
+        # Dev-only: the whole settings row (board disclosure + Advanced
+        # Settings). The default 6x4 / 50 mm board is right for the rig, and
+        # everything else in here is something you open once, deliberately.
         opts = ttk.Frame(self.root, padding=(8, 0, 8, 8))
-        opts.pack(side=tk.TOP, fill=tk.X)
+        self._register_row(self.root, [(opts, {"side": tk.TOP, "fill": tk.X}, True)])
         self.board_option_widgets = []
 
         self._board_panel_visible = False
@@ -329,12 +382,11 @@ class _BaseCalibrationApp:
 
         nav = ttk.Frame(left, padding=(0, 8, 0, 0))
         nav.pack(side=tk.BOTTOM, fill=tk.X)
-        ttk.Button(nav, text="Previous", command=self.prev_sample).pack(side=tk.LEFT)
-        ttk.Button(nav, text="Next", command=self.next_sample).pack(side=tk.LEFT, padx=4)
+        prev_button = ttk.Button(nav, text="Previous", command=self.prev_sample)
+        next_button = ttk.Button(nav, text="Next", command=self.next_sample)
         self.delete_button = ttk.Button(
             nav, text="Delete Sample", command=self.delete_sample
         )
-        self.delete_button.pack(side=tk.LEFT, padx=4)
         self.forward_view_toggle = ttk.Checkbutton(
             nav,
             text="Forward view (undistorted)",
@@ -342,22 +394,29 @@ class _BaseCalibrationApp:
             command=self._on_forward_view_toggle,
             state="disabled",
         )
-        self.forward_view_toggle.pack(side=tk.RIGHT)
         self.image_label = ttk.Label(nav, text="No accepted sample loaded")
-        self.image_label.pack(side=tk.LEFT, padx=12)
+        # Only the "which sample am I looking at" caption is always needed.
+        # Browsing, deleting a bad sample and the forward-view check are all
+        # inspection tools, so they live in dev mode.
+        self._register_row(nav, [
+            (prev_button, {"side": tk.LEFT}, True),
+            (next_button, {"side": tk.LEFT, "padx": 4}, True),
+            (self.delete_button, {"side": tk.LEFT, "padx": 4}, True),
+            (self.image_label, {"side": tk.LEFT, "padx": 12}, False),
+            (self.forward_view_toggle, {"side": tk.RIGHT}, True),
+        ])
 
         sidebar = self._right_scroll_frame
 
-        ttk.Label(
+        progress_title = ttk.Label(
             sidebar, text="Calibration Progress", font=self.theme.font(14, "bold")
-        ).pack(anchor="center")
+        )
         # Three lines instead of one "Status: NOT READY -- need more varied
         # views (8 accepted samples)" label"
         self.readiness_verdict = ttk.Label(
             sidebar, text="No photos loaded yet", font=self.theme.font(13, "bold"),
             wraplength=320, justify="center",
         )
-        self.readiness_verdict.pack(anchor="center", pady=(8, 2))
         self.readiness_action = ttk.Label(
             sidebar,
             text=(
@@ -366,34 +425,44 @@ class _BaseCalibrationApp:
             ),
             font=self.theme.font(10), wraplength=320, justify="center",
         )
-        self.readiness_action.pack(anchor="center")
         self.readiness_detail = ttk.Label(
             sidebar, text="", font=self.theme.font(8), foreground=self.theme.muted,
             wraplength=320, justify="center",
         )
-        self.readiness_detail.pack(anchor="center", pady=(4, 10))
 
         # Four ROS-style range bars: X, Y, Size, Skew.
         self.bar_canvas = self._card_canvas(sidebar, height=140)
-        self.bar_canvas.pack(anchor="center", pady=(0, 10))
-        self._draw_bars([])
-
-        ttk.Label(
+        coverage_title = ttk.Label(
             sidebar, text="Board position coverage", font=self.theme.font(10, "bold")
-        ).pack(anchor="center")
+        )
         self.coverage_canvas = self._card_canvas(sidebar, height=180)
-        self.coverage_canvas.pack(anchor="center", pady=(4, 10))
-        self._draw_coverage_graph()
-
-        ttk.Label(sidebar, text="Sample log", font=self.theme.font(10, "bold")).pack(
-            anchor="w"
+        log_title = ttk.Label(
+            sidebar, text="Sample log", font=self.theme.font(10, "bold")
         )
         self.log_box = self._text_card(sidebar, height=10)
-
-        ttk.Label(
+        suggestion_title = ttk.Label(
             sidebar, text="Next images to capture", font=self.theme.font(10, "bold")
-        ).pack(anchor="w")
+        )
         self.suggestion_box = self._text_card(sidebar, height=6)
+
+        # The three readiness lines are the whole of the minimal sidebar:(_text_card packs the card frame and returns the Text, so
+        # .master is what has to be hidden.)
+        self._register_row(sidebar, [
+            (progress_title, {"anchor": "center"}, True),
+            (self.readiness_verdict, {"anchor": "center", "pady": (8, 2)}, False),
+            (self.readiness_action, {"anchor": "center"}, False),
+            (self.readiness_detail, {"anchor": "center", "pady": (4, 10)}, False),
+            (self.bar_canvas, {"anchor": "center", "pady": (0, 10)}, True),
+            (coverage_title, {"anchor": "center"}, True),
+            (self.coverage_canvas, {"anchor": "center", "pady": (4, 10)}, True),
+            (log_title, {"anchor": "w"}, True),
+            (self.log_box.master, {"anchor": "w", "fill": "x", "pady": (4, 10)}, True),
+            (suggestion_title, {"anchor": "w"}, True),
+            (self.suggestion_box.master,
+             {"anchor": "w", "fill": "x", "pady": (4, 10)}, True),
+        ])
+        self._draw_bars([])
+        self._draw_coverage_graph()
 
         actions = ttk.Frame(right)
         actions.pack(side=tk.BOTTOM, fill=tk.X)
@@ -408,13 +477,25 @@ class _BaseCalibrationApp:
 
         # A hairline plus muted text instead of a sunken groove: the status
         # line is the app's only persistent feedback surface, so it should
-        # read as a quiet strip rather than a second toolbar.
-        ttk.Separator(self.root).pack(side=tk.BOTTOM, fill=tk.X)
+        # read as a quiet strip rather than a second toolbar. The Dev toggle
+        # lives here because it is the one control that must stay reachable in
+        # the minimal layout without adding anything to the main window.
+        footer = ttk.Frame(self.root)
+        footer.pack(side=tk.BOTTOM, fill=tk.X)
+        ttk.Separator(footer).pack(side=tk.TOP, fill=tk.X)
         self.bottom_status = ttk.Label(
-            self.root, text="", anchor="w", padding=(10, 4),
-            foreground=self.theme.muted,
+            footer, text="", anchor="w", padding=(10, 4), foreground=self.theme.muted,
         )
-        self.bottom_status.pack(side=tk.BOTTOM, fill=tk.X)
+        self.bottom_status.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self.dev_button = ttk.Button(
+            footer,
+            text=("Hide dev" if self.dev_mode else "Dev"),
+            command=self._toggle_dev_mode,
+            width=6,
+            style=("Dev.TButton" if self.dev_mode else "TButton"),
+        )
+        self.dev_button.pack(side=tk.RIGHT, padx=4, pady=2)
+        ttk.Style(self.root).configure("Dev.TButton", foreground=self.theme.good)
 
     def _card_canvas(self, parent, height: int):
         """A white drawing surface that matches the rest of the palette."""
@@ -771,9 +852,13 @@ class _BaseCalibrationApp:
         can do its own job: answers the question - can i calibrate?
         """
         if n == 0:
+            # Must stand on its own: the sample log that would explain a
+            # rejection is hidden in the minimal layout, so point at the cause
+            # rather than at a panel that may not be on screen.
             return (
                 "No photos accepted yet",
-                "The sample log below says why each photo was skipped.",
+                "Check the LED grid is in view, well lit, and fills enough of "
+                "the frame -- then capture again.",
                 "",
             )
 
@@ -1666,6 +1751,7 @@ def launch_gui(
     config: CalibratorConfig | None = None,
     output_dir: str = ".",
     slow_find_center: bool = False,
+    dev_mode: bool = False,
 ) -> None:
     """Launch the interactive batch (folder-based) calibration GUI."""
     _require_gui_deps()
@@ -1679,6 +1765,7 @@ def launch_gui(
         config=config,
         output_dir=output_dir,
         slow_find_center=slow_find_center,
+        dev_mode=dev_mode,
     )
     root.mainloop()
 
@@ -1692,6 +1779,7 @@ def launch_live_gui(
     initial_topic: str = "image",
     output_dir: str = ".",
     slow_find_center: bool = False,
+    dev_mode: bool = False,
 ) -> None:
     """Launch the live (ROS 2 topic-driven) calibration GUI."""
     _require_gui_deps()
@@ -1712,5 +1800,6 @@ def launch_live_gui(
         config=CalibratorConfig.from_calibrator(calibrator),
         output_dir=output_dir,
         slow_find_center=slow_find_center,
+        dev_mode=dev_mode,
     )
     root.mainloop()

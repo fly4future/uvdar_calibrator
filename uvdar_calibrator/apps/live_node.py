@@ -338,6 +338,12 @@ def _build_arg_parser() -> argparse.ArgumentParser:
                        "and sample browsing) would otherwise grow unbounded over a "
                        f"long-running capture. Default: {DEFAULT_MAX_ACCEPTED_SAMPLES}."
                    ))
+    p.add_argument("--dev", action="store_true",
+                   help=(
+                       "In the GUI, show the diagnostic panels that are hidden "
+                       "by default (range bars, coverage graph, sample log, "
+                       "settings). Also toggle in-app with Ctrl+D."
+                   ))
     add_sample_selection_args(p)
     return p
 
@@ -393,6 +399,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
             subscribe_fn=node.subscribe,
             initial_topic=node.resolved_topic,
             output_dir=args.output_dir,
+            dev_mode=args.dev,
         )
     finally:
         consumer.stop()
