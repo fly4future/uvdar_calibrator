@@ -153,6 +153,12 @@ class _BaseCalibrationApp:
     ``_update_progress_panel`` / ``_render_frame``.
     """
 
+    # True only in BatchCalibrationApp. Its Base/Ext file filters moved out of
+    # the main window into the Advanced Settings dialog, and a live topic has
+    # no folder to filter, so the base app contributes no file-filter rows.
+    #TODO do we want them in advance settings? how often are they really used
+    _has_file_filters = False
+
     def __init__(
         self,
         root,
@@ -478,9 +484,10 @@ class _BaseCalibrationApp:
         Modal dialog for the settings that are not on the main window:
         taylor_order, fov_radius_frac, sample_threshold, param_ranges
         (X/Y/Size/Skew), min_db_size, max_accepted_samples,
-        save_previews_for_rejected, slow_find_center, show_plots. Editable in
-        batch mode; read-only in live mode, where the running Calibrator can't
-        be reconfigured mid-capture (see self._advanced_settings_read_only).
+        save_previews_for_rejected, slow_find_center, show_plots, plus the
+        batch app's base_name/extension file filters. Editable in batch mode;
+        read-only in live mode, where the running Calibrator can't be
+        reconfigured mid-capture (see self._advanced_settings_read_only).
         """
         cfg = self.calib_config
         read_only = self._advanced_settings_read_only
@@ -517,6 +524,36 @@ class _BaseCalibrationApp:
             return var
 
         row = 0
+
+        # Which files to load. since they are batch only (base and ext)
+        file_filter_vars = None
+        if self._has_file_filters:
+            ttk.Label(
+                body, text="Which files to load", font=self.theme.font(9, "bold")
+            ).grid(row=row, column=0, columnspan=3, sticky="w", pady=(0, 4))
+            row += 1
+            base_var = _labeled_entry(
+                row, "Filename base:", self.base_name.get(),
+                "load only files whose name starts with this; blank = all",
+            )
+            row += 1
+            ext_var = _labeled_entry(
+                row, "File extension:", self.extension.get(),
+                "load only this extension; blank or 'all' = every supported one",
+            )
+            row += 1
+            file_filter_vars = (base_var, ext_var)
+
+            ttk.Separator(body, orient=tk.HORIZONTAL).grid(
+                row=row, column=0, columnspan=3, sticky="ew", pady=8
+            )
+            row += 1
+
+        ttk.Label(
+            body, text="Calibration model and sample selection",
+            font=self.theme.font(9, "bold"),
+        ).grid(row=row, column=0, columnspan=3, sticky="w", pady=(0, 4))
+        row += 1
 
         taylor_var = _labeled_entry(
             row, "Taylor order:", self.taylor_order.get(),
@@ -670,6 +707,11 @@ class _BaseCalibrationApp:
                 self.taylor_order.set(taylor_order)
                 self.slow_find_center.set(slow_center_var.get())
                 self.show_plots.set(show_plots_var.get())
+                if file_filter_vars is not None:
+                    # load_images() re-reads these when it globs the folder, so
+                    # the dialog is the only place they live now.
+                    self.base_name.set(base_var.get().strip())
+                    self.extension.set(ext_var.get().strip())
                 dialog.destroy()
 
             ttk.Button(actions, text="Cancel", command=_close).pack(side=tk.LEFT, padx=(0, 6))
@@ -1255,6 +1297,8 @@ class _BaseCalibrationApp:
 class BatchCalibrationApp(_BaseCalibrationApp):
     """Folder-based app: Load / Analyze runs handle_frame over each photo."""
 
+    _has_file_filters = True
+
     def __init__(
         self,
         root,
@@ -1270,6 +1314,7 @@ class BatchCalibrationApp(_BaseCalibrationApp):
         self._set_status("Choose a folder and click Load / Analyze Images.")
 
     def _build_source_controls(self, parent):
+        # Base/Ext filters moved to the Advanced Settings dialog; 
         ttk.Label(parent, text="Image folder:").grid(row=0, column=0, sticky="w")
         ttk.Entry(parent, textvariable=self.image_dir, width=45).grid(
             row=0, column=1, sticky="ew", padx=4
@@ -1277,13 +1322,8 @@ class BatchCalibrationApp(_BaseCalibrationApp):
         ttk.Button(parent, text="Browse", command=self._browse_images).grid(
             row=0, column=2, padx=4
         )
-
-        ttk.Label(parent, text="Base:").grid(row=0, column=3, sticky="e")
-        ttk.Entry(parent, textvariable=self.base_name, width=8).grid(row=0, column=4, padx=4)
-        ttk.Label(parent, text="Ext:").grid(row=0, column=5, sticky="e")
-        ttk.Entry(parent, textvariable=self.extension, width=7).grid(row=0, column=6, padx=4)
         ttk.Button(parent, text="Load / Analyze Images", command=self.load_images).grid(
-            row=0, column=7, padx=8
+            row=0, column=3, padx=8
         )
         parent.columnconfigure(1, weight=1)
 
