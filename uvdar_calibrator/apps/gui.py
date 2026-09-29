@@ -351,10 +351,27 @@ class _BaseCalibrationApp:
         ttk.Label(
             sidebar, text="Calibration Progress", font=self.theme.font(14, "bold")
         ).pack(anchor="center")
-        self.status_label = ttk.Label(
-            sidebar, text="No images analyzed yet", wraplength=320, justify="center"
+        # Three lines instead of one "Status: NOT READY -- need more varied
+        # views (8 accepted samples)" label"
+        self.readiness_verdict = ttk.Label(
+            sidebar, text="No photos loaded yet", font=self.theme.font(13, "bold"),
+            wraplength=320, justify="center",
         )
-        self.status_label.pack(anchor="center", pady=(8, 10))
+        self.readiness_verdict.pack(anchor="center", pady=(8, 2))
+        self.readiness_action = ttk.Label(
+            sidebar,
+            text=(
+                "Offline mode: press Load / Analyze to read a folder of photos. "
+                "To calibrate live from a camera, use the cameracalibrator node."
+            ),
+            font=self.theme.font(10), wraplength=320, justify="center",
+        )
+        self.readiness_action.pack(anchor="center")
+        self.readiness_detail = ttk.Label(
+            sidebar, text="", font=self.theme.font(8), foreground=self.theme.muted,
+            wraplength=320, justify="center",
+        )
+        self.readiness_detail.pack(anchor="center", pady=(4, 10))
 
         # Four ROS-style range bars: X, Y, Size, Skew.
         self.bar_canvas = self._card_canvas(sidebar, height=140)
@@ -746,6 +763,53 @@ class _BaseCalibrationApp:
     # Progress panel
     # ------------------------------------------------------------------
 
+    def _plain_readiness(self, goodenough, progress, n, min_db_size, guide):
+        """
+        The (verdict, action, detail) triple shown above the range bars.
+
+        Three jobs that used to share one "Status: ..." string, split so each
+        can do its own job: answers the question - can i calibrate?
+        """
+        if n == 0:
+            return (
+                "No photos accepted yet",
+                "The sample log below says why each photo was skipped.",
+                "",
+            )
+
+        axes_short = [name for name, _lo, _hi, p in progress if p < 1.0]
+        count_short = n < min_db_size
+
+        if goodenough:
+            return (
+                "Ready to calibrate",
+                "Press CALIBRATE.",
+                f"{n} photos accepted, all four views covered",
+            )
+
+        # One action, chosen by what is actually blocking: a thin database is
+        # fixed by taking more photos, a coverage gap by moving the board. When
+        # both apply, the position advice is the more specific of the two, so
+        # it leads and the count is appended.
+        if axes_short and guide is not None:
+            action = guide["text"] + "."
+            if count_short:
+                action += f" Keep going -- {n} of {min_db_size} photos so far."
+        elif count_short:
+            action = f"Add more photos -- {n} of {min_db_size} so far."
+        elif axes_short:
+            names = ", ".join(axes_short)
+            action = f"Vary the view: the {names} range is still too narrow."
+        else:
+            action = "Add more photos."
+
+        detail = f"{n} of {min_db_size} photos" if count_short else f"{n} photos"
+        for name, _lo, _hi, p in progress:
+            if p < 1.0:
+                detail += f" - {name} {100.0 * p:.0f}%"
+
+        return ("Not ready yet", action, detail)
+
     def _update_progress_panel(self):
         cal = self.calibrator
         if cal is None:
@@ -758,11 +822,15 @@ class _BaseCalibrationApp:
         self._draw_coverage_graph()
 
         n = len(cal.db)
-        if goodenough:
-            status = f"READY TO CALIBRATE ({n} accepted samples)"
-        else:
-            status = f"NOT READY -- need more varied views ({n} accepted samples)"
-        self.status_label.configure(text=f"Status: {status}")
+        guide = self._coverage_overlay_guide()
+        verdict, action, detail = self._plain_readiness(
+            goodenough, progress, n, cal.min_db_size, guide,
+        )
+        self.readiness_verdict.configure(
+            text=verdict, foreground=(self.theme.good if goodenough else self.theme.text),
+        )
+        self.readiness_action.configure(text=action)
+        self.readiness_detail.configure(text=detail)
 
         # Gate CALIBRATE on goodenough; allow an explicit override once
         # samples exist (confirmation dialog in calibrate()).
@@ -776,12 +844,8 @@ class _BaseCalibrationApp:
         else:
             suggestions = ["No accepted samples yet."]
 
-        # The position guide answers "where next", which is more actionable
-        # than the bin report's "what's missing" -- so it goes first.
-        overlay = self._coverage_overlay_guide()
-        if overlay is not None:
-            suggestions.insert(0, overlay["text"])
-
+        # The position guide used to be the first bullet here, but it is now the
+        # headline action above
         self._write_text(self.suggestion_box, "\n".join(f"• {s}" for s in suggestions))
 
     def _progress_color(self, p: float) -> str:
@@ -1466,6 +1530,12 @@ class LiveCalibrationApp(_BaseCalibrationApp):
 
         self._refresh_capture_button()
         self._set_status(f"Live capture running on topic '{initial_topic}'.")
+        # The pre-run readiness block is worded for a photo folder; live mode
+        # has no folder and no Load button, so restate it in topic terms.
+        self.readiness_verdict.configure(text="Waiting for frames")
+        self.readiness_action.configure(
+            text="Press Start Capture to begin collecting photos from the topic."
+        )
         self.root.after(self.POLL_MS, self._poll_queue)
 
     def _build_source_controls(self, parent):
