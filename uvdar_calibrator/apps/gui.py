@@ -415,7 +415,7 @@ class _BaseCalibrationApp:
         # views (8 accepted samples)" label"
         self.readiness_verdict = ttk.Label(
             sidebar, text="No photos loaded yet", font=self.theme.font(13, "bold"),
-            wraplength=320, justify="center",
+            wraplength=340, justify="center",
         )
         self.readiness_action = ttk.Label(
             sidebar,
@@ -423,11 +423,11 @@ class _BaseCalibrationApp:
                 "Offline mode: press Load / Analyze to read a folder of photos. "
                 "To calibrate live from a camera, use the cameracalibrator node."
             ),
-            font=self.theme.font(10), wraplength=320, justify="center",
+            font=self.theme.font(10), wraplength=340, justify="center",
         )
         self.readiness_detail = ttk.Label(
             sidebar, text="", font=self.theme.font(8), foreground=self.theme.muted,
-            wraplength=320, justify="center",
+            wraplength=340, justify="center",
         )
 
         # Four ROS-style range bars: X, Y, Size, Skew.
