@@ -208,6 +208,11 @@ class _BaseCalibrationApp:
         self._advanced_settings_read_only = False
         self.show_plots = tk.BooleanVar(value=False)
         self.forward_view_var = tk.BooleanVar(value=False)
+        # Rectilinear FOV. The default keeps the calibration check readable;
+        # widening it shows more of the frame at the cost of black corners,
+            self.forward_view_hfov = tk.DoubleVar(
+            value=ocam_model.DEFAULT_FORWARD_VIEW_HFOV_DEG
+        )
 
         # Dev mode hides everything that is diagnostic rather than actionable:
         # the bars keep whatever they were drawing and the log keeps its history.
@@ -227,6 +232,10 @@ class _BaseCalibrationApp:
         self.photo_ref = None
         self._forward_view_cache = None        # (map_x, map_y) or None
         self._forward_view_model_id = None     # id(last built-from model)
+        # The cache is also keyed on mode+hfov, both of which can now
+        # change without touching the calibrator, so a stale map must not be
+        # reused
+        self._forward_view_key = None
 
         self._build_widgets()
         self.root.bind("<Left>", lambda _e: self.prev_sample())
@@ -394,6 +403,17 @@ class _BaseCalibrationApp:
             command=self._on_forward_view_toggle,
             state="disabled",
         )
+        # Spinbox: Upper bound is the measured limit: past ~144 deg the mapping
+        # samples outside the sensor and the view is mostly black.
+        self.forward_view_fov_box = ttk.Spinbox(
+            nav,
+            from_=60.0, to=140.0, increment=5.0,
+            textvariable=self.forward_view_hfov,
+            width=5,
+            command=self._on_forward_view_toggle,
+            state="disabled",
+        )
+        self.forward_view_fov_label = ttk.Label(nav, text="FOV")
         self.image_label = ttk.Label(nav, text="No accepted sample loaded")
         # Only the "which sample am I looking at" caption is always needed.
         # Browsing, deleting a bad sample and the forward-view check are all
@@ -403,6 +423,8 @@ class _BaseCalibrationApp:
             (next_button, {"side": tk.LEFT, "padx": 4}, True),
             (self.delete_button, {"side": tk.LEFT, "padx": 4}, True),
             (self.image_label, {"side": tk.LEFT, "padx": 12}, False),
+            (self.forward_view_fov_label, {"side": tk.RIGHT}, True),
+            (self.forward_view_fov_box, {"side": tk.RIGHT, "padx": (0, 8)}, True),
             (self.forward_view_toggle, {"side": tk.RIGHT}, True),
         ])
 
@@ -445,7 +467,8 @@ class _BaseCalibrationApp:
         )
         self.suggestion_box = self._text_card(sidebar, height=6)
 
-        # The three readiness lines are the whole of the minimal sidebar:(_text_card packs the card frame and returns the Text, so
+        # The three readiness lines are the whole of the minimal sidebar.
+        # (_text_card packs the card frame and returns the Text, so
         # .master is what has to be hidden.)
         self._register_row(sidebar, [
             (progress_title, {"anchor": "center"}, True),
@@ -1098,13 +1121,32 @@ class _BaseCalibrationApp:
         if cal is None or not cal.calibrated or cal.last_ocam_model is None:
             return None
         model = cal.last_ocam_model
-        if self._forward_view_model_id != id(model):
-            self._forward_view_cache = ocam_model.build_forward_view_maps(model)
+        hfov = self.forward_view_hfov.get()
+        key = round(hfov, 1)
+        if self._forward_view_model_id != id(model) or self._forward_view_key != key:
+            self._forward_view_cache = ocam_model.build_forward_view_maps(
+                model, hfov_deg=hfov
+            )
             self._forward_view_model_id = id(model)
+            self._forward_view_key = key
         return self._forward_view_cache
 
+    def _sync_forward_view_controls(self):
+        """Enable the forward-view controls only once a model exists."""
+        calibrated = (
+            self.calibrator is not None
+            and self.calibrator.calibrated
+            and self.calibrator.last_ocam_model is not None
+        )
+        state = "normal" if calibrated else "disabled"
+        self.forward_view_toggle.configure(state="normal" if calibrated else "disabled")
+        # The FOV only means something while the remap is active.
+        active = calibrated and self.forward_view_var.get()
+        self.forward_view_fov_box.configure(state="normal" if active else "disabled")
+        self.forward_view_fov_label.configure(state="normal" if active else "disabled")
+
     def _apply_forward_view(self, image, corners):
-        """Remap a raw frame to the forward view when the toggle is on."""
+        """Remap a raw frame to the forward view when a mode other than raw is on."""
         if not self.forward_view_var.get():
             return image, corners
         maps = self._forward_view_maps()
@@ -1117,6 +1159,7 @@ class _BaseCalibrationApp:
         return remapped, None  # corners are in raw-image coords; meaningless on the remap
 
     def _on_forward_view_toggle(self):
+        self._sync_forward_view_controls()
         self._show_current_sample()
 
     def _coverage_overlay_guide(self):
@@ -1386,7 +1429,11 @@ class _BaseCalibrationApp:
             finally:
                 self.root.configure(cursor="")
             self.save_button.configure(state="normal")
-            self.forward_view_toggle.configure(state="normal")
+            self.forward_view_var.set(False)
+            self._forward_view_cache = None
+            self._forward_view_model_id = None
+            self._forward_view_key = None
+            self._sync_forward_view_controls()
 
             avg = float(np.nanmean(cal.reprojection_err))
             self._set_status(
@@ -1530,9 +1577,10 @@ class BatchCalibrationApp(_BaseCalibrationApp):
             self.current_sample_index = 0
             self.save_button.configure(state="disabled")
             self.forward_view_var.set(False)
-            self.forward_view_toggle.configure(state="disabled")
             self._forward_view_cache = None
             self._forward_view_model_id = None
+            self._forward_view_key = None
+            self._sync_forward_view_controls()
             self._write_text(self.log_box, "")
 
             n_rejected = 0
