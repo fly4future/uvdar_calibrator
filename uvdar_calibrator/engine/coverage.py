@@ -318,6 +318,7 @@ def compute_goodenough_with_bins(
                 "size": ["close/large", "far/small", "medium"],
                 "tilt": ["front-on", "moderately tilted"],
                 "quadrants": ["LB", "LT", "RB", "RT"],
+                "cells": list(COVERAGE_CELLS),
             },
             "sets": {
                 "x": set(),
@@ -325,6 +326,7 @@ def compute_goodenough_with_bins(
                 "size": set(),
                 "tilt": set(),
                 "quadrants": set(),
+                "cells": set(),
             },
         }
         return range_good, progress, empty_report
@@ -385,6 +387,41 @@ COVERAGE_SKEW_BINS = (
     (0.15, 0.35, "moderately tilted"),
     (0.35, 2.00, "strongly tilted"),
 )
+
+# The 3x3 frame grid the suggestion box names as a target: one cell per
+# (x_bin, y_bin) pair, in reading order so the fallback target is predictable.
+COVERAGE_X_BIN_NAMES = tuple(b[2] for b in COVERAGE_X_BINS)
+COVERAGE_Y_BIN_NAMES = tuple(b[2] for b in COVERAGE_Y_BINS)
+COVERAGE_CELLS = tuple(
+    f"{y_name}-{x_name}"
+    for y_name in COVERAGE_Y_BIN_NAMES
+    for x_name in COVERAGE_X_BIN_NAMES
+)
+
+
+# Any tilt counts as skew variety; strong tilt is not required (it makes UV
+# dot extraction fragile).
+_SKEWED_BINS = {"moderately tilted", "strongly tilted"}
+
+
+def cell_center(name: str) -> Tuple[float, float]:
+    """Normalized ``(x, y)`` center of a named 3x3 frame cell."""
+    y_name, x_name = name.split("-", 1)
+    xi = COVERAGE_X_BIN_NAMES.index(x_name)
+    yi = COVERAGE_Y_BIN_NAMES.index(y_name)
+    x_lo, x_hi, _ = COVERAGE_X_BINS[xi]
+    y_lo, y_hi, _ = COVERAGE_Y_BINS[yi]
+    # Outer bins overshoot 1.0 to stay half-open; clamp before averaging.
+    return ((x_lo + min(x_hi, 1.0)) / 2.0, (y_lo + min(y_hi, 1.0)) / 2.0)
+
+
+def _cell_at(x_bin: str, y_bin: str) -> str:
+    """Name the cell formed by a pair of axis bins.
+
+    Takes bin names, not raw positions, so a cell can never disagree with the
+    x/y bins the sample is reported in.
+    """
+    return f"{y_bin}-{x_bin}"
 
 
 def _coverage_bin(value: float, bins) -> str:
@@ -455,6 +492,8 @@ def sample_metric(
         "L" if x_center < 0.5 else "R",
         "T" if y_center < 0.5 else "B",
     )
+    x_bin = _coverage_bin(x_center, COVERAGE_X_BINS)
+    y_bin = _coverage_bin(y_center, COVERAGE_Y_BINS)
 
     return {
         "label": label,
@@ -462,11 +501,12 @@ def sample_metric(
         "y": max(0.0, min(1.0, y_center)),
         "size": max(0.0, size),
         "skew": max(0.0, min(1.0, skew)),
-        "x_bin": _coverage_bin(x_center, COVERAGE_X_BINS),
-        "y_bin": _coverage_bin(y_center, COVERAGE_Y_BINS),
+        "x_bin": x_bin,
+        "y_bin": y_bin,
         "size_bin": _coverage_bin(size, COVERAGE_SIZE_BINS),
         "skew_bin": _coverage_bin(skew, COVERAGE_SKEW_BINS),
         "quadrant": "".join(quadrant),
+        "cell": _cell_at(x_bin, y_bin),
     }
 
 
@@ -477,20 +517,24 @@ def compute_bin_coverage(metrics: List[dict]) -> dict:
     size_bins = {m["size_bin"] for m in metrics}
     skew_bins = {m["skew_bin"] for m in metrics}
     quadrants = {m["quadrant"] for m in metrics}
+    # Metrics cached before "cell" existed still count toward the other sets.
+    cells = {m["cell"] for m in metrics if m.get("cell")}
 
     required_x = {b[2] for b in COVERAGE_X_BINS}
     required_y = {b[2] for b in COVERAGE_Y_BINS}
     required_size = {b[2] for b in COVERAGE_SIZE_BINS}
-    # Strong tilt is useful, but forcing it can make UV extraction fragile.
-    required_skew = {"front-on", "moderately tilted"}
     required_quadrants = {"LT", "RT", "LB", "RB"}
 
     missing = {
         "x": sorted(required_x - x_bins),
         "y": sorted(required_y - y_bins),
         "size": sorted(required_size - size_bins),
-        "tilt": sorted(required_skew - skew_bins),
+        # Variety, not a checklist: requiring both "front-on" and "moderately
+        # tilted" as literal bins could never be satisfied by a user who
+        # always tilts the board.
+        "tilt": ([] if _SKEWED_BINS & skew_bins else ["moderately tilted"]),
         "quadrants": sorted(required_quadrants - quadrants),
+        "cells": [c for c in COVERAGE_CELLS if c not in cells],
     }
 
     return {
@@ -503,24 +547,58 @@ def compute_bin_coverage(metrics: List[dict]) -> dict:
             "size": size_bins,
             "tilt": skew_bins,
             "quadrants": quadrants,
+            "cells": cells,
         },
     }
 
 
+def next_target_cell(report: dict) -> Optional[str]:
+    """The empty frame cell farthest from every accepted sample.
+
+    That cell adds the most information; one in the middle of an existing
+    cluster teaches the solver least. Ties break on reading order so the
+    suggestion stays stable rather than flickering with noise.
+    """
+    empty = report["missing"].get("cells") or []
+    if not empty:
+        return None
+    points = [(m["x"], m["y"]) for m in report["metrics"]]
+    if not points:
+        return empty[0]
+
+    def nearest_gap_distance(cell: str) -> float:
+        cx, cy = cell_center(cell)
+        return min(math.hypot(px - cx, py - cy) for px, py in points)
+
+    best = max(empty, key=lambda c: (nearest_gap_distance(c), -empty.index(c)))
+    return best
+
+
+def _cell_phrase(cell: str) -> str:
+    y_name, x_name = cell.split("-", 1)
+    # "top-left" reads as a place; "top-center" does not.
+    if x_name == "center":
+        return f"{y_name} of the frame (centre of its width)"
+    return f"{y_name}-{x_name} of the frame"
+
+
 def coverage_suggestions(report: dict) -> List[str]:
+    """One concrete next capture, not a list of every shortfall.
+
+    Naming the exact spot to put the board beats asking the user to reason
+    about five abstract dimensions at once. Tilt/size wording only appears
+    once every cell is occupied.
+    """
+    cell = next_target_cell(report)
+    if cell is not None:
+        return [f"put the grid in the {_cell_phrase(cell)}"]
+
     missing = report["missing"]
-    suggestions = []
-    if missing["x"]:
-        suggestions.append("move the board/dot grid toward: " + ", ".join(missing["x"]))
-    if missing["y"]:
-        suggestions.append("move the board/dot grid toward: " + ", ".join(missing["y"]))
-    if missing["size"]:
-        suggestions.append("capture size(s): " + ", ".join(missing["size"]))
     if missing["tilt"]:
-        suggestions.append("capture tilt(s): " + ", ".join(missing["tilt"]))
-    if missing["quadrants"]:
-        suggestions.append("include image quadrants: " + ", ".join(missing["quadrants"]))
-    return suggestions
+        return ["tilt the grid off-axis for the next shot"]
+    if missing["size"]:
+        return ["change the distance: " + " or ".join(missing["size"])]
+    return []
 
 
 def format_bin_coverage(report: dict) -> str:
@@ -533,12 +611,12 @@ def format_bin_coverage(report: dict) -> str:
     lines.append(_coverage_bar("x position", len(sets["x"]), len(COVERAGE_X_BINS)))
     lines.append(_coverage_bar("y position", len(sets["y"]), len(COVERAGE_Y_BINS)))
     lines.append(_coverage_bar("size", len(sets["size"]), len(COVERAGE_SIZE_BINS)))
-    lines.append(_coverage_bar("tilt", len(sets["tilt"] & {"front-on", "moderately tilted"}), 2))
-    lines.append(_coverage_bar("quadrants", len(sets["quadrants"]), 4))
+    lines.append(_coverage_bar("tilt", 1 if _SKEWED_BINS & sets["tilt"] else 0, 1))
+    lines.append(_coverage_bar("frame cells", len(sets.get("cells", ())), 9))
 
     suggestions = coverage_suggestions(report)
     if suggestions:
-        lines.append("Next images to capture:")
+        lines.append("Next image to capture:")
         for s in suggestions:
             lines.append(f"  - {s}")
     else:
@@ -546,10 +624,11 @@ def format_bin_coverage(report: dict) -> str:
 
     lines.append("")
     lines.append("Per-sample coverage metrics:")
-    lines.append("sample,x_bin,y_bin,size_bin,tilt_bin,x_norm,y_norm,size,tilt")
+    lines.append("sample,cell,x_bin,y_bin,size_bin,tilt_bin,x_norm,y_norm,size,tilt")
     for m in report["metrics"]:
         lines.append(
-            f"{m['label']},{m['x_bin']},{m['y_bin']},{m['size_bin']},{m['skew_bin']},"
+            f"{m['label']},{m.get('cell', '')},{m['x_bin']},{m['y_bin']},"
+            f"{m['size_bin']},{m['skew_bin']},"
             f"{m['x']:.3f},{m['y']:.3f},{m['size']:.3f},{m['skew']:.3f}"
         )
     return "\n".join(lines)

@@ -208,9 +208,9 @@ class _BaseCalibrationApp:
         self._advanced_settings_read_only = False
         self.show_plots = tk.BooleanVar(value=False)
         self.forward_view_var = tk.BooleanVar(value=False)
-        # Rectilinear FOV. The default keeps the calibration check readable;
-        # widening it shows more of the frame at the cost of black corners,
-            self.forward_view_hfov = tk.DoubleVar(
+        # Rectilinear FOV. Wider shows more of the frame but adds black corners:
+        # a rectilinear projection breaks down past ~90 deg off-axis.
+        self.forward_view_hfov = tk.DoubleVar(
             value=ocam_model.DEFAULT_FORWARD_VIEW_HFOV_DEG
         )
 
@@ -463,9 +463,9 @@ class _BaseCalibrationApp:
         )
         self.log_box = self._text_card(sidebar, height=10)
         suggestion_title = ttk.Label(
-            sidebar, text="Next images to capture", font=self.theme.font(10, "bold")
+            sidebar, text="Next image to capture", font=self.theme.font(10, "bold")
         )
-        self.suggestion_box = self._text_card(sidebar, height=6)
+        self.suggestion_box = self._text_card(sidebar, height=4)
 
         # The three readiness lines are the whole of the minimal sidebar.
         # (_text_card packs the card frame and returns the Text, so
@@ -1175,87 +1175,55 @@ class _BaseCalibrationApp:
         """
         Where to put the board next, as normalized image coordinates.
 
-        Reads the per-axis progress from compute_goodenough_with_bins and
-        turns the least-covered axes into one target position plus a short
-        instruction. Returns None when nothing needs improving, which is how
-        callers know to draw no guidance at all.
+        The on-image box and the coverage graph both draw from this, so they
+        cannot disagree with the suggestion text. None when nothing needs
+        improving, which is how callers know to draw no guidance.
         """
         cal = self.calibrator
         if cal is None:
             return None
 
         metrics = cal.db_metrics()
-
-        _goodenough, progress, _report = coverage.compute_goodenough_with_bins(
-            cal.db_params(), metrics, cal.param_ranges, cal.min_db_size,
-        )
-
-        if not progress:
-            return {
-                "x": 0.5,
-                "y": 0.5,
-                "size": 0.22,
-                "text": "Place the LED grid near the center of the image.",
-            }
+        report = coverage.compute_bin_coverage(metrics) if metrics else None
+        suggestions = coverage.coverage_suggestions(report) if report else []
+        if not report or not suggestions:
+            return None
 
         progress_map = {}
-        for name, lo, hi, p in progress:
-            progress_map[str(name).strip().lower()] = (float(lo), float(hi), float(p))
+        if cal.db:
+            _goodenough, progress, _r = coverage.compute_goodenough_with_bins(
+                cal.db_params(), metrics, cal.param_ranges, cal.min_db_size,
+            )
+            for name, lo, hi, p in progress:
+                progress_map[str(name).strip().lower()] = (
+                    float(lo), float(hi), float(p)
+                )
 
-        x = 0.5
-        y = 0.5
-        size = 0.22
-        instructions = []
-
-        x_info = progress_map.get("x")
-        if x_info is not None:
-            lo, hi, p = x_info
-            if p < 1.0:
-                # Push toward whichever side is less explored: if the
-                # accepted range hugs one half, aim at the other.
-                if hi < 0.55 or (lo <= 0.45 and lo <= 1.0 - hi):
-                    x = 0.82
-                    instructions.append("move right")
-                else:
-                    x = 0.18
-                    instructions.append("move left")
-
-        y_info = progress_map.get("y")
-        if y_info is not None:
-            lo, hi, p = y_info
-            if p < 1.0:
-                if hi < 0.55 or (lo <= 0.45 and lo <= 1.0 - hi):
-                    y = 0.82
-                    instructions.append("move lower")
-                else:
-                    y = 0.18
-                    instructions.append("move higher")
+        cell = coverage.next_target_cell(report)
+        if cell is not None:
+            x, y = coverage.cell_center(cell)
+        else:
+            # All cells filled: stay put and change angle or distance instead.
+            x = float(np.mean([s.params[0] for s in cal.db]))
+            y = float(np.mean([s.params[1] for s in cal.db]))
 
         size_info = progress_map.get("size")
-        if size_info is not None:
-            lo, hi, p = size_info
-            if p < 1.0:
-                if lo > 0.12 and hi >= 0.22:
-                    size = 0.10
-                    instructions.append("move farther / make grid smaller")
-                else:
-                    size = 0.34
-                    instructions.append("move closer / make grid larger")
-            elif cal.db:
-                size = float(np.median([s.params[2] for s in cal.db]))
-
-        skew_info = progress_map.get("skew")
-        if skew_info is not None and skew_info[2] < 1.0:
-            instructions.append("tilt the board")
-
-        if not instructions:
-            return None
+        if size_info is not None and size_info[2] < 1.0:
+            lo, hi, _p = size_info
+            if lo > 0.12 and hi >= 0.22:
+                size = 0.10
+            else:
+                size = 0.34
+        elif cal.db:
+            size = float(np.median([s.params[2] for s in cal.db]))
+        else:
+            size = 0.22
 
         return {
             "x": max(0.05, min(0.95, x)),
             "y": max(0.05, min(0.95, y)),
             "size": max(0.08, min(0.45, size)),
-            "text": "Move LED grid here: " + ", ".join(instructions),
+            "text": suggestions[0],
         }
 
     def _draw_position_guide_on_image(self, preview):

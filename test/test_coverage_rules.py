@@ -113,6 +113,86 @@ def test_bins_do_not_gate_readiness():
     print("ok: bin report does not gate readiness")
 
 
+def _metric_at(x, y, size_bin="medium", skew_bin="front-on"):
+    """A synthetic bin metric, as sample_metric would have produced one."""
+    x_bin = coverage._coverage_bin(x, coverage.COVERAGE_X_BINS)
+    y_bin = coverage._coverage_bin(y, coverage.COVERAGE_Y_BINS)
+    return {
+        "label": f"{x:.2f},{y:.2f}",
+        "x": x, "y": y, "size": 0.2, "skew": 0.1,
+        "x_bin": x_bin,
+        "y_bin": y_bin,
+        "size_bin": size_bin,
+        "skew_bin": skew_bin,
+        "quadrant": ("L" if x < 0.5 else "R") + ("T" if y < 0.5 else "B"),
+        "cell": coverage._cell_at(x_bin, y_bin),
+    }
+
+
+def test_suggestion_names_one_empty_cell_then_falls_back():
+    """The hint box must name a concrete 3x3 cell, then switch to tilt/size."""
+    assert len(coverage.COVERAGE_CELLS) == 9, "expected a 3x3 frame grid"
+    assert len(set(coverage.COVERAGE_CELLS)) == 9, "cell names must be unique"
+
+    # Three samples in the middle column leave six cells empty; the pick is the
+    # farthest from all of them, not just any empty one.
+    metrics = [_metric_at(0.5, 0.2), _metric_at(0.5, 0.5), _metric_at(0.5, 0.8)]
+    report = coverage.compute_bin_coverage(metrics)
+    target = coverage.next_target_cell(report)
+    assert target in coverage.COVERAGE_CELLS, target
+    assert target not in {m["cell"] for m in metrics}, "suggested an occupied cell"
+    suggestions = coverage.coverage_suggestions(report)
+    assert len(suggestions) == 1, f"expected one bullet, got {suggestions}"
+    assert coverage._cell_phrase(target) in suggestions[0], suggestions
+
+    # Filling it must advance the target rather than repeat the advice.
+    cx, cy = coverage.cell_center(target)
+    metrics.append(_metric_at(cx, cy))
+    nxt = coverage.next_target_cell(coverage.compute_bin_coverage(metrics))
+    assert nxt != target, "target did not advance after filling the cell"
+
+    # All nine cells occupied -> switches to tilt/size wording.
+    metrics = [
+        _metric_at(coverage.cell_center(c)[0], coverage.cell_center(c)[1])
+        for c in coverage.COVERAGE_CELLS
+    ]
+    assert coverage.next_target_cell(coverage.compute_bin_coverage(metrics)) is None
+    assert coverage.coverage_suggestions(coverage.compute_bin_coverage(metrics)) == [
+        "tilt the grid off-axis for the next shot"
+    ]
+
+    # All cells and sizes, some tilt -> nothing left to suggest.
+    for i, m in enumerate(metrics):
+        m["size_bin"] = ("far/small", "medium", "close/large")[i % 3]
+        m["skew_bin"] = "moderately tilted"
+    assert coverage.coverage_suggestions(coverage.compute_bin_coverage(metrics)) == []
+
+    # Tilting every shot must satisfy tilt; the old literal-bin rule demanded
+    # "front-on" too and so could never be satisfied.
+    for m in metrics:
+        m["skew_bin"] = "strongly tilted"
+    assert coverage.coverage_suggestions(coverage.compute_bin_coverage(metrics)) == []
+    print("ok: suggestion names one empty cell, then falls back to skew/size")
+
+
+def test_every_cell_center_maps_back_to_its_own_cell():
+    """Cell names and centers must agree.
+
+    A center is where the guide box is drawn, so one falling outside its own
+    cell would point the user at a spot the app classifies elsewhere.
+    """
+    for name in coverage.COVERAGE_CELLS:
+        cx, cy = coverage.cell_center(name)
+        assert 0.0 < cx < 1.0 and 0.0 < cy < 1.0, f"{name} center off-frame"
+        xb = coverage._coverage_bin(cx, coverage.COVERAGE_X_BINS)
+        yb = coverage._coverage_bin(cy, coverage.COVERAGE_Y_BINS)
+        assert coverage._cell_at(xb, yb) == name, (
+            f"{name} center ({cx:.3f},{cy:.3f}) classifies as "
+            f"{coverage._cell_at(xb, yb)}"
+        )
+    print("ok: each cell's center classifies back to that cell")
+
+
 def test_param_distance_is_range_normalized():
     """Equal fractions of an axis's target span must cost the same distance."""
     ranges = (0.6, 0.6, 0.3, 0.45)
