@@ -14,3 +14,6 @@ calibration_output/
 # Configs generated from config/**/*.template
 config/basler/camera.yaml
 config/basler/session.yaml
+config/libcamera/camera_custom_config.yaml
+config/libcamera/camera_calib.yaml
+config/libcamera/session.yaml
