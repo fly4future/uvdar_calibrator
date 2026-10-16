@@ -1,0 +1,14 @@
+root: ./
+name: uvdar_calibrator
+socket_name: f4f
+attach: false
+tmux_options: -f /etc/ctu-mrs/tmux.conf
+pre_window:
+  - export RMW_IMPLEMENTATION=rmw_zenoh_cpp
+startup_window: uvdar_calibrator
+windows:
+  - zenoh: ros2 run rmw_zenoh_cpp rmw_zenohd
+
+  - pylon_ros_driver: ros2 launch pylon_ros2_camera_wrapper pylon_ros2_camera.launch.py config_file:=$PWD/basler/camera.yaml
+
+  - uvdar_calibrator: ros2 run uvdar_calibrator cameracalibrator --output_dir /calibration_output --camera_id "__CAMERA_ID__" image:=__DRIVER_IMAGE_TOPIC__

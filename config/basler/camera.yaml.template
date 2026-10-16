@@ -1,0 +1,265 @@
+# Camera parameters
+
+/**:
+  ros__parameters:
+
+    #  The tf frame under which the images were published
+    camera_frame: camera1
+
+    #  Launch-file defaults. These are consumed by the launch script when the
+    #  corresponding launch arguments are not passed explicitly.
+    camera_id: uvdar_calibrator
+    node_name: camera
+    # respawn: false
+
+    #  The DeviceUserID of the camera. If empty, the first camera found in the
+    #  device list will be used
+    device_user_id: ""
+
+    #  A secondary selector for the camera by serial number.
+    #  Used only when device_user_id is empty.
+    device_serial_number: "REPLACE_WITH_SERIAL" # set by docker/calibrate.sh from the template
+
+    #  The CameraInfo URL (Uniform Resource Locator) where the optional intrinsic
+    #  camera calibration parameters are stored. This URL string will be parsed
+    #  from the ROS-CameraInfoManager:
+    # camera_info_url: ""
+    # camera_info_url: package://pylon_ros2_camera_wrapper/config/camera_calibration.yaml
+
+    #  The encoding of the pixels -- channel meaning, ordering, size
+    #  taken from the list of strings in include/sensor_msgs/image_encodings.h
+    #  The supported encodings are 'mono8', 'bgr8', 'rgb8', 'bayer_bggr8',
+    #  'bayer_gbrg8' and 'bayer_rggb8'
+    image_encoding: 'mono8'
+
+    #  Binning factor to get downsampled images. It refers here to any camera
+    #  setting which combines rectangular neighborhoods of pixels into larger
+    #  "super-pixels." It reduces the resolution of the output image to
+    #  (width / binning_x) x (height / binning_y).
+    #  The default values binning_x = binning_y = 0 are considered the same
+    #  as binning_x = binning_y = 1 (no subsampling).
+    binning_x: 2
+    binning_y: 2
+
+    #  The desired publisher frame rate if listening to the topics.
+    #  This parameter can only be set once at startup.
+    #  Set to -1 to publish images as fast as possible.
+    #  Calling the GrabImages-Action can result in a higher framerate.
+    #  The maximum possible frame rate is displayed when starting the driver.
+    frame_rate: 60.0
+
+    #  Mode of camera's shutter.
+    #  The supported modes are "rolling", "global" and "global_reset"
+    #  Default value is "" (empty) means default_shutter_mode
+    # shutter_mode: ""
+
+    ##########################################################################
+    ######################## Image Intensity Settings ########################
+    ##########################################################################
+    # The following settings do *NOT* have to be set. Each camera has default
+    # values which provide an automatic image adjustment resulting in valid
+    # images
+    ##########################################################################
+
+    #  The exposure time in microseconds to be set after opening the camera.
+    exposure: 500.0
+
+    #  The target gain in percent of the maximal value the camera supports
+    #  For USB cameras, the gain is in dB, for GigE cameras it is given in so
+    #  called 'device specific units'.
+    # gain: 0.5
+
+    #  Gamma correction of pixel intensity.
+    #  Adjusts the brightness of the pixel values output by the camera's sensor
+    #  to account for a non-linearity in the human perception of brightness or
+    #  of the display system (such as CRT).
+    # gamma: 1.0
+
+    #  The average intensity value of the images
+    #  It depends on the exposure time as well as the gain setting. 
+    #  If 'exposure' is provided, the interface will
+    #  try to reach the desired brightness by only varying the gain. (What may
+    #  often fail, because the range of possible exposure values is many
+    #  times higher than the gain range). If 'gain' is provided, the interface will
+    #  try to reach the desired brightness by only varying the exposure time. If
+    #  gain AND exposure are given, it is not possible to reach the brightness,
+    #  because both are assumed to be fixed.
+    # brightness: 100
+
+    #  Only relevant, if 'brightness' is set
+    #  The brightness_continuous flag controls the auto brightness function.
+    #  If it is set to false, the brightness will only be reached once.
+    #  Hence changing light conditions lead to changing brightness values.
+    #  If it is set to true, the given brightness will be reached continuously,
+    #  trying to adapt to changing light conditions. This is only possible for
+    #  values in the possible auto range of the pylon API which is generally [50 - 205].
+    # brightness_continuous: true
+
+    #  Only relevant, if 'brightness' is set
+    #  If the camera should try to reach and / or keep the brightness, hence
+    #  adapting to changing light conditions, at least one of the following flags
+    #  must be set.
+    #  If both are set, the interface will use the profile that tries to keep the
+    #  gain at minimum to reduce white noise.
+    #  The exposure_auto flag indicates, that the desired brightness will be
+    #  reached by adapting the exposure time.
+    #  The gain_auto flag indicates, that the desired brightness will be
+    #  reached by adapting the gain.
+    # exposure_auto: true
+    # gain_auto: true
+
+    ##########################################################################
+
+    #  The timeout while searching the exposure which is connected to the
+    #  desired brightness. For slow system this has to be increased.
+    # exposure_search_timeout: 5.0
+
+    #  The exposure search can be limited with an upper bound. This is to prevent
+    #  very high exposure times and resulting timeouts.
+    #  A typical value for this upper bound is ~2000000us.
+    #  Beware that this upper limit is only set if `startup_user_set` is set to `Default`.
+    # auto_exposure_upper_limit: 2000000.0
+
+    #  The MTU size. Only used for GigE cameras.
+    #  To prevent lost frames configure the camera has to be configured
+    #  with the MTU size the network card supports. A value greater 3000
+    #  should be good (1500 for single-board computer)
+    #  mtu_size: 3000
+
+    #  The startup user set. This can also be overridden by the launch argument.
+    #  Use "CurrentSetting" for preserving camera profile and expected maximum FPS.
+    startup_user_set: CurrentSetting
+    
+    #  These publisher flags can be configured either here or via launch args.
+    # enable_status_publisher: false
+    # enable_current_params_publisher: false
+
+    #  Keep the stream grabber fed at high USB3 frame rates.
+    grab_strategy: 0
+
+    #  the inter-packet delay in ticks to prevent frame loss, support the network bandwith priorisation
+    #  generally needs to modified if more than one cameras is involved or if hardware is not performing well 
+    #  raise inter-packet delay (GevSCPD) for solving error: 'the buffer was incompletely grabbed'
+    #  https://docs.baslerweb.com/knowledge/troubleshooting-error-code-3774873620-0xe1000014-with-gige-cameras
+    #  for most of GigE cameras, a value of 1000 is reasonable
+    #  for cameras used on a single-board computer this value should be set to 11772
+    #  beware that the inter-packet delay decrease will result in frame rate reduction
+    # inter_pkg_delay: 1000
+
+    #  Only used for GigE cameras.
+    #  The frame transmission delay in ticks.
+    #  In most cases, this parameter should be set to 0.
+    #  However, if your network hardware can't handle spikes in network traffic
+    #  (e.g., if you are triggering multiple camera simultaneously),
+    #  you can use the frame transmission delay parameter to stagger the
+    #  start of image data transmissions from each camera.
+    #  frame_transmission_delay: 0
+
+    ##########################################################################
+    ################ Service-Mirrored SDK Startup Parameters #################
+    ##########################################################################
+    # These optional parameters mirror the node's SDK services and are applied
+    # once during startup after the camera opens and before grabbing starts.
+    # Only parameters present in your YAML are applied.
+    # Set only values supported by your specific camera model; unsupported
+    # overrides can cause startup to fail.
+
+    # User sets and image geometry.
+    # user_set_selector: 0
+    # user_set_default_selector: 0
+    # offset_x: 0
+    # offset_y: 0
+    # roi_x_offset: 0
+    # roi_y_offset: 0
+    # roi_width: 0
+    # roi_height: 0
+    # black_level: 0
+    # reverse_x: false
+    # reverse_y: false
+
+    # Image processing and color pipeline.
+    # pgi_mode: false
+    # demosaicing_mode: 0
+    # noise_reduction: 0.0
+    # sharpness_enhancement: 0.0
+    # light_source_preset: 0
+    # white_balance_auto: 0
+    # auto_function_roi_selector: 0
+    # gamma_selector: 0
+    # gamma_activation: false
+
+    # Acquisition and trigger control.
+    # sensor_readout_mode: 0
+    # acquisition_frame_count: 0
+    # trigger_selector: 0
+    # trigger_mode: false
+    # overlap_mode: false
+    # trigger_source: 0
+    # trigger_activation: 0
+    # trigger_delay: 0.0
+
+    # Line I/O.
+    # line_selector: 0
+    # line_mode: 0
+    # line_source: 0
+    # line_format: 0
+    # line_inverter: false
+    # line_debouncer_time: 0.0
+
+    # Transport and stream tuning.
+    # device_link_throughput_limit_mode: false
+    # device_link_throughput_limit: 0
+    # max_transfer_size: 0
+    # output_queue_size: 0
+    # max_num_buffer: 0
+
+    # Chunk data.
+    # chunk_mode_active: false
+    # chunk_selector: 0
+    # chunk_enable: false
+    # chunk_exposure_time: 0.0
+
+    # Timers and periodic signals.
+    # timer_selector: 0
+    # timer_trigger_source: 0
+    # timer_duration: 0.0
+    # periodic_signal_period: 0.0
+    # periodic_signal_delay: 0.0
+
+    # PTP and synchronized free run.
+    # enable_ptp_management_protocol: false
+    # enable_two_step_operation: false
+    # enable_ptp: false
+    # ptp_priority: 0
+    # ptp_profile: 0
+    # ptp_network_mode: 0
+    # ptp_uc_port_address_index: 0
+    # ptp_uc_port_address: 0
+    # enable_sync_free_run_timer: false
+    # sync_free_run_timer_start_time_low: 0
+    # sync_free_run_timer_start_time_high: 0
+    # sync_free_run_timer_trigger_rate_abs: 0.0
+
+    # blaze and 3D processing.
+    # depth_min: 0
+    # depth_max: 0
+    # temporal_filter_strength: 0
+    # outlier_removal_threshold: 0
+    # outlier_removal_tolerance: 0
+    # ambiguity_filter_threshold: 0
+    # confidence_threshold: 0
+    # intensity_calculation: 0
+    # exposure_time_selector: 0
+    # operating_mode: 0
+    # multi_camera_channel: 0
+    # enable_spatial_filter: false
+    # enable_temporal_filter: false
+    # enable_outlier_removal: false
+    # enable_ambiguity_filter: false
+    # enable_thermal_drift_correction: false
+    # enable_distortion_correction: false
+    # enable_acquisition_frame_rate: false
+    # acquisition_frame_rate: 0.0
+    # scan_3d_calibration_offset: 0.0
+    # enable_hdr_mode: false
+    # enable_fast_mode: false

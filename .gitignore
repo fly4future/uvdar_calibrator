@@ -11,3 +11,6 @@ venv/
 .vscode/
 calibration_output/
 
+# Configs generated from config/**/*.template
+config/basler/camera.yaml
+config/basler/session.yaml
