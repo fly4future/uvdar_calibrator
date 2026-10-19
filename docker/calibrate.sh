@@ -14,6 +14,11 @@ SCRIPT=$(readlink -f "$0")
 REPO_ROOT=$(dirname "$(dirname "$SCRIPT")")
 CONFIG_DIR="$REPO_ROOT/config"
 
+# This script is PID 1 in the container, and PID 1 ignores SIGINT by default,
+# so Ctrl+C does nothing unless we install a handler ourselves.
+cleanup() { tmux -L f4f kill-session -t uvdar_calibrator >/dev/null 2>&1 || true; }
+trap 'echo; echo "Aborted." >&2; cleanup; exit 130' INT TERM
+
 # set +u
 # if [[ -f "/opt/ros/${ROS_DISTRO:-jazzy}/setup.bash" ]]; then
 #   # shellcheck disable=SC1091
@@ -196,48 +201,43 @@ setup_basler() {
   generate_from_template "$cam_cfg" "$cam_cfg.template"
   echo
   echo "== Basler setup =="
-  local serials=()
-  python3 >/tmp/basler_list.txt 2>/tmp/basler_err.txt <<'EOF' || true
-try:
-    from pypylon import pylon
-except ImportError:
-    raise SystemExit("no pypylon")
-tlf = pylon.TlFactory.GetInstance()
-devs = tlf.EnumerateDevices()
-if not devs:
-    raise SystemExit("no devices")
-for d in devs:
-    print(f"{d.GetSerialNumber()}|{d.GetModelName()}|{d.GetUserDefinedName()}")
-EOF
+  echo "Detecting Basler cameras..."
 
+  # pypylon prints one "<serial>|<model>|<user id>" line per camera; the user
+  # id is empty when the camera has none set. Anything that goes wrong (pypylon
+  # missing, no camera, GigE not reachable) leaves the listing empty and writes
+  # the reason to /tmp/basler_err.txt.
+  local listing=""
+  listing=$(python3 2>/tmp/basler_err.txt <<'EOF' || true
+from pypylon import pylon
+for d in pylon.TlFactory.GetInstance().EnumerateDevices():
+    user = d.GetUserDefinedName() if d.IsUserDefinedNameAvailable() else ""
+    print(f"{d.GetSerialNumber()}|{d.GetModelName()}|{user}")
+EOF
+  )
+
+  local serials=() labels=() ser model user
+  while IFS='|' read -r ser model user; do
+    [[ -n "$ser" ]] || continue
+    serials+=("$ser")
+    # Serial and model always; user id only when the camera has one set.
+    labels+=("$ser $model${user:+ (user id: $user)}")
+  done <<< "$listing"
 
   local serial=""
   if ((${#serials[@]} > 0)); then
-    local labels=() line ser model user label
-    for line in "${serials[@]}"; do
-      IFS='|' read -r ser model user <<< "$line"
-      label="$ser"
-      if [[ -n "$model" && -n "$user" ]]; then
-        label+=" ($model, user '$user')"
-      elif [[ -n "$model" ]]; then
-        label+=" ($model)"
-      elif [[ -n "$user" ]]; then
-        label+=" (user '$user')"
-      fi
-      labels+=("$label")
-    done
-    echo
     echo "Select the camera to calibrate:"
     local choice=""
     select choice in "${labels[@]}"; do
-      if [[ -n "$choice" ]]; then
-        serial="${serials[$((REPLY-1))]}"
-        serial="${serial%%|*}" # raw entries are "serial|model|user" — keep the serial
-        break
-      fi
+      [[ -n "$choice" ]] && { serial="${serials[$((REPLY-1))]}"; break; }
     done
   else
-    echo "Enter the camera serial number (read from sticker on the camera or use pylon viewer)."
+    local err
+    err=$(head -c 300 /tmp/basler_err.txt 2>/dev/null | tr '\n' ' ')
+    echo "WARNING: no Basler camera detected by pypylon." >&2
+    [[ -n "$err" ]] && echo "  pypylon said: $err" >&2
+    echo "  A GigE camera also needs host networking (--network host)." >&2
+    echo "Enter the camera serial number (sticker on the camera, or Basler pylon Viewer)."
     read -rp "device_serial_number: " serial
   fi
   [[ -z "$serial" ]] && { echo "ERROR: serial number cannot be empty." >&2; exit 1; }
