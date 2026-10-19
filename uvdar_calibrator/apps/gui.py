@@ -1007,27 +1007,51 @@ class _BaseCalibrationApp:
             )
             lo_c = max(0.0, min(1.0, lo))
             hi_c = max(0.0, min(1.0, hi))
-            if hi_c > lo_c:
-                c.create_rectangle(
-                    x0 + (x1 - x0) * lo_c,
-                    y - 8,
-                    x0 + (x1 - x0) * hi_c,
-                    y + 8,
-                    outline="",
-                    fill=self._progress_color(p),
-                )
+            name_str = str(name).strip().lower()
+            if name_str in ("size", "skew"):
+                if p > 0:
+                    fill_end = x0 + (x1 - x0) * min(p, 1.0)
+                    c.create_rectangle(
+                        x0,
+                        y - 8,
+                        fill_end,
+                        y + 8,
+                        outline="",
+                        fill=self._progress_color(p),
+                    )
+            else:
+                if hi_c > lo_c:
+                    c.create_rectangle(
+                        x0 + (x1 - x0) * lo_c,
+                        y - 8,
+                        x0 + (x1 - x0) * hi_c,
+                        y + 8,
+                        outline="",
+                        fill=self._progress_color(p),
+                    )
+            name_str = str(name).strip().lower()
             c.create_text(
                 x1 + 10, y, text=f"{100.0 * p:.0f}% covered", anchor="w",
                 font=self.theme.font(8), fill=self.theme.text,
             )
-            c.create_text(
-                x0, y - 14, text=f"{lo_c:.2f}", anchor="w",
-                font=self.theme.font(7), fill=self.theme.muted,
-            )
-            c.create_text(
-                x1, y - 14, text=f"{hi_c:.2f}", anchor="e",
-                font=self.theme.font(7), fill=self.theme.muted,
-            )
+            if name_str in ("size", "skew"):
+                c.create_text(
+                    x0, y - 14, text=f"min", anchor="w",
+                    font=self.theme.font(7), fill=self.theme.muted,
+                )
+                c.create_text(
+                    x1, y - 14, text=f"max", anchor="e",
+                    font=self.theme.font(7), fill=self.theme.muted,
+                )
+            else:
+                c.create_text(
+                    x0, y - 14, text=f"{lo_c:.2f}", anchor="w",
+                    font=self.theme.font(7), fill=self.theme.muted,
+                )
+                c.create_text(
+                    x1, y - 14, text=f"{hi_c:.2f}", anchor="e",
+                    font=self.theme.font(7), fill=self.theme.muted,
+                )
             y += 36
 
     def _skew_color(self, skew: float) -> str:
