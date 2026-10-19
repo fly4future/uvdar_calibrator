@@ -308,6 +308,12 @@ def _build_arg_parser() -> argparse.ArgumentParser:
                    help="Polynomial degree. Default: 4.")
     p.add_argument("--output_dir", default=".",
                    help="Folder for Omni_Calib_Results, calib_results.txt and previews.")
+    p.add_argument("--camera_id", default="",
+                   help=(
+                       "Camera identifier written to the driver config by the "
+                       "calibration wizard. "
+                       "Used for the suggested SAVE filename."
+                   ))
     p.add_argument("--rate_hz", type=float, default=DEFAULT_RATE_HZ,
                    help=(
                        "Maximum frame-processing rate. Frames arriving faster are "
@@ -391,6 +397,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
             consumer,
             subscribe_fn=node.subscribe,
             initial_topic=node.resolved_topic,
+            camera_id=args.camera_id,
             output_dir=args.output_dir,
         )
     finally:

@@ -27,6 +27,7 @@ from __future__ import annotations
 from dataclasses import replace
 from pathlib import Path
 import queue
+import re
 import time
 
 import numpy as np
@@ -54,6 +55,24 @@ except Exception:  # pragma: no cover - headless environments
 #: Keep at most this many lines in the sample log (relevant for live mode,
 #: where rejected-frame lines keep arriving for as long as capture runs).
 MAX_LOG_LINES = 1000
+
+
+def _sanitize_filename_part(text: str) -> str:
+    """Make free-form text (a ROS topic, a folder name) safe for a filename."""
+    return re.sub(r"[^A-Za-z0-9._-]+", "_", text or "").strip("._")
+
+
+def camera_id_from_config(identifier: str) -> str:
+    """
+    Derive a filename-safe camera identifier from a driver config value.
+
+    """
+    return _sanitize_filename_part((identifier or "").strip())
+
+
+def camera_id_from_image_dir(image_dir: str) -> str:
+    """Derive a filename-safe camera identifier from a photo folder path."""
+    return _sanitize_filename_part(Path(image_dir or "").name)
 
 
 def _require_gui_deps() -> None:
@@ -942,6 +961,17 @@ class _BaseCalibrationApp:
             messagebox.showerror("Calibration failed", str(exc))
             self._set_status("Calibration failed.")
 
+    def _default_save_filename(self) -> str:
+        """Suggested SAVE/EXPORT filename; subclasses add their camera source."""
+        return "calib_results.txt"
+
+    def _suffixed_save_filename(self, camera_id: str) -> str:
+        """``calib_results_<camera_id>.txt``, or the plain default if empty."""
+        camera_id = _sanitize_filename_part(camera_id)
+        if not camera_id:
+            return "calib_results.txt"
+        return f"calib_results_{camera_id}.txt"
+
     def save_and_export(self):
         cal = self.calibrator
         if cal is None or not cal.calibrated:
@@ -950,7 +980,7 @@ class _BaseCalibrationApp:
         path = filedialog.asksaveasfilename(
             title="Save calibration results",
             initialdir=self.output_dir.get() or ".",
-            initialfile="calib_results.txt",
+            initialfile=self._default_save_filename(),
             defaultextension=".txt",
             filetypes=[("Text files", "*.txt"), ("All files", "*.*")],
         )
@@ -1004,6 +1034,11 @@ class BatchCalibrationApp(_BaseCalibrationApp):
         folder = filedialog.askdirectory(initialdir=self.image_dir.get() or ".")
         if folder:
             self.image_dir.set(folder)
+
+    def _default_save_filename(self) -> str:
+        return self._suffixed_save_filename(
+            camera_id_from_image_dir(self.image_dir.get())
+        )
 
     # ------------------------------------------------------------------
     # Incremental load: one handle_frame per photo
@@ -1098,6 +1133,7 @@ class LiveCalibrationApp(_BaseCalibrationApp):
         consumer,
         subscribe_fn,
         initial_topic: str = "image",
+        camera_id: str = "",
         **kwargs,
     ):
         self.result_queue = result_queue
@@ -1106,6 +1142,9 @@ class LiveCalibrationApp(_BaseCalibrationApp):
         self.subscribe_fn = subscribe_fn
         self.topic = tk.StringVar(value=initial_topic)
         self._subscribed_topic = initial_topic
+        # Identifier from the driver config (wizard's --camera_id); used for
+        # the suggested SAVE filename. Empty means fall back to the topic.
+        self.camera_id = camera_id or ""
         self.n_rejected = 0
         self.n_failed = 0
         self._latest_preview = None
@@ -1127,6 +1166,13 @@ class LiveCalibrationApp(_BaseCalibrationApp):
         self._refresh_capture_button()
         self._set_status(f"Live capture running on topic '{initial_topic}'.")
         self.root.after(self.POLL_MS, self._poll_queue)
+
+    def _default_save_filename(self) -> str:
+        # Named after the camera identifier from the driver config (set by
+        # the wizard via --camera_id); empty there means the plain default.
+        return self._suffixed_save_filename(
+            camera_id_from_config(self.camera_id)
+        )
 
     def _build_source_controls(self, parent):
         ttk.Label(parent, text="Image topic:").grid(row=0, column=0, sticky="w")
@@ -1280,6 +1326,7 @@ def launch_live_gui(
     consumer,
     subscribe_fn,
     initial_topic: str = "image",
+    camera_id: str = "",
     output_dir: str = ".",
     slow_find_center: bool = False,
 ) -> None:
@@ -1294,6 +1341,7 @@ def launch_live_gui(
         consumer=consumer,
         subscribe_fn=subscribe_fn,
         initial_topic=initial_topic,
+        camera_id=camera_id,
         # The live Calibrator is already built (by live_node.py's main());
         # this seeds the (disabled, display-only) board/taylor widgets and
         # keeps self.calib_config in sync with the real running Calibrator,

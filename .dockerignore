@@ -1,0 +1,8 @@
+__pycache__/
+.git
+venv/
+.venv/
+.vscode/
+docker-dev.sh
+doc/
+.fig/
