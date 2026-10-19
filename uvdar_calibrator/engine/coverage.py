@@ -348,10 +348,17 @@ def format_progress(
 
     for name, lo, hi, p in progress:
         n = round(bar_width * p)
-        lines.append(
-            f"{name:5s} [{'#' * n}{'.' * (bar_width - n)}] "
-            f"lo={lo:.2f} hi={hi:.2f} progress={100.0 * p:.0f}%"
-        )
+        name_str = str(name).strip().lower()
+        if name_str in ("size", "skew"):
+            lines.append(
+                f"{name:5s} [{'#' * n}{'.' * (bar_width - n)}] "
+                f"coverage toward target = {100.0 * p:.0f}%"
+            )
+        else:
+            lines.append(
+                f"{name:5s} [{'#' * n}{'.' * (bar_width - n)}] "
+                f"range [{lo:.2f}-{hi:.2f}] coverage={100.0 * p:.0f}%"
+            )
 
     lines.append(
         "Status: ready to calibrate."
