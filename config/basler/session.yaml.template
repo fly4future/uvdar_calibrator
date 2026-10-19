@@ -11,4 +11,5 @@ windows:
 
   - pylon_ros_driver: ros2 launch pylon_ros2_camera_wrapper pylon_ros2_camera.launch.py config_file:=$PWD/basler/camera.yaml
 
-  - uvdar_calibrator: ros2 run uvdar_calibrator cameracalibrator --output_dir /calibration_output --camera_id "__CAMERA_ID__" image:=__DRIVER_IMAGE_TOPIC__
+  # Closing the GUI ends the whole session (and with it the container); on a crash the window stays open so the error can be read
+  - uvdar_calibrator: ros2 run uvdar_calibrator cameracalibrator --output_dir /calibration_output --camera_id "__CAMERA_ID__" image:=__DRIVER_IMAGE_TOPIC__ && tmux -L f4f kill-session -t uvdar_calibrator
