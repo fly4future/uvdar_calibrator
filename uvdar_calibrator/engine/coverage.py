@@ -350,7 +350,7 @@ def format_progress(
         n = round(bar_width * p)
         lines.append(
             f"{name:5s} [{'#' * n}{'.' * (bar_width - n)}] "
-            f"lo={lo:.2f} hi={hi:.2f} progress={100.0 * p:.0f}%"
+            f"range [{lo:.2f}-{hi:.2f}] coverage={100.0 * p:.0f}%"
         )
 
     lines.append(
