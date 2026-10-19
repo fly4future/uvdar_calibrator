@@ -933,8 +933,9 @@ class _BaseCalibrationApp:
         detail = f"{n} of {min_db_size} photos" if count_short else f"{n} photos"
         for name, _lo, _hi, p in progress:
             if p < 1.0:
-                detail += f" - {name} {100.0 * p:.0f}%"
-
+                detail += f" - {name}: {100.0 * p:.0f}% coverage"
+            else:
+                detail += f" - {name}: full coverage"
         return ("Not ready yet", action, detail)
 
     def _update_progress_panel(self):
@@ -989,14 +990,8 @@ class _BaseCalibrationApp:
             round(b1 + (b2 - b1) * t),
         )
 
-    def _draw_bars(self, progress):
-        """
-        Draw the four ROS-style range bars.
-
-        Each bar is a 0..1 track; the colored segment spans the min..max
-        parameter values covered by the accepted samples (mirroring
-        OpenCVCalibrationNode.redraw_monocular's bar drawing).
-        """
+        def _draw_bars(self, progress):
+        """Draw clearer range coverage bars."""
         c = self.bar_canvas
         c.delete("all")
 
@@ -1012,20 +1007,51 @@ class _BaseCalibrationApp:
             )
             lo_c = max(0.0, min(1.0, lo))
             hi_c = max(0.0, min(1.0, hi))
-            if hi_c > lo_c:
-                c.create_rectangle(
-                    x0 + (x1 - x0) * lo_c,
-                    y - 8,
-                    x0 + (x1 - x0) * hi_c,
-                    y + 8,
-                    outline="",
-                    fill=self._progress_color(p),
-                )
+            name_str = str(name).strip().lower()
+            if name_str in ("size", "skew"):
+                if p > 0:
+                    fill_end = x0 + (x1 - x0) * min(p, 1.0)
+                    c.create_rectangle(
+                        x0,
+                        y - 8,
+                        fill_end,
+                        y + 8,
+                        outline="",
+                        fill=self._progress_color(p),
+                    )
+            else:
+                if hi_c > lo_c:
+                    c.create_rectangle(
+                        x0 + (x1 - x0) * lo_c,
+                        y - 8,
+                        x0 + (x1 - x0) * hi_c,
+                        y + 8,
+                        outline="",
+                        fill=self._progress_color(p),
+                    )
             c.create_text(
-                x1 + 10, y, text=f"{100.0 * p:.0f}%", anchor="w",
-                font=self.theme.font(9), fill=self.theme.text,
+                x1 + 10, y, text=f"{100.0 * p:.0f}% covered", anchor="w",
+                font=self.theme.font(8), fill=self.theme.text,
             )
-            y += 32
+            if name_str in ("size", "skew"):
+                c.create_text(
+                    x0, y - 14, text="min", anchor="w",
+                    font=self.theme.font(7), fill=self.theme.muted,
+                )
+                c.create_text(
+                    x1, y - 14, text="max", anchor="e",
+                    font=self.theme.font(7), fill=self.theme.muted,
+                )
+            else:
+                c.create_text(
+                    x0, y - 14, text=f"{lo_c:.2f}", anchor="w",
+                    font=self.theme.font(7), fill=self.theme.muted,
+                )
+                c.create_text(
+                    x1, y - 14, text=f"{hi_c:.2f}", anchor="e",
+                    font=self.theme.font(7), fill=self.theme.muted,
+                )
+            y += 36
 
     def _skew_color(self, skew: float) -> str:
         """Interpolate a dot's fill color by skew: light blue (0) -> dark orange (1)."""
