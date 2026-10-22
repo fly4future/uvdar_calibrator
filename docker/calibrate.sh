@@ -19,6 +19,22 @@ CONFIG_DIR="$REPO_ROOT/config"
 cleanup() { tmux -L f4f kill-session -t uvdar_calibrator >/dev/null 2>&1 || true; }
 trap 'echo; echo "Aborted." >&2; cleanup; exit 130' INT TERM
 
+# The container runs as root, so everything it writes into the mounted output
+# directory is root-owned on the host. On exit, hand those files to the host
+# user: HOST_UID/HOST_GID if given, otherwise the owner of the mounted directory.
+OUTPUT_DIR="${OUTPUT_DIR:-/calibration_output}"
+fix_output_ownership() {
+  [[ -d "$OUTPUT_DIR" ]] || return 0
+  local uid="${HOST_UID:-$(stat -c %u "$OUTPUT_DIR")}"
+  local gid="${HOST_GID:-$(stat -c %g "$OUTPUT_DIR")}"
+  if [[ "$uid" == 0 ]]; then
+    echo "NOTE: $OUTPUT_DIR is owned by root; pass -e HOST_UID=\$(id -u) -e HOST_GID=\$(id -g) to get files owned by you." >&2
+    return 0
+  fi
+  find "$OUTPUT_DIR" -uid 0 -exec chown -h "$uid:$gid" {} + 2>/dev/null || true
+}
+trap fix_output_ownership EXIT
+
 # set +u
 # if [[ -f "/opt/ros/${ROS_DISTRO:-jazzy}/setup.bash" ]]; then
 #   # shellcheck disable=SC1091
@@ -266,4 +282,5 @@ esac
 # Restart a stale session from a previous run, if any.
 tmux -L f4f kill-session -t uvdar_calibrator >/dev/null 2>&1 || true
 
-exec "$CONFIG_DIR/run-tmux.sh"
+# Not exec'd, so the EXIT trap still fixes the output ownership afterwards.
+"$CONFIG_DIR/run-tmux.sh"
