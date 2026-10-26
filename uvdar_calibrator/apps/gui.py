@@ -24,8 +24,10 @@ class so the apps never diverge.
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from dataclasses import dataclass, replace
 from pathlib import Path
+import math
 import queue
 import re
 import time
@@ -219,6 +221,9 @@ class _BaseCalibrationApp:
     # True only in LiveCalibrationApp: the mirror switch acts on the incoming
     # frame stream, which only the live app has.
     _mirror_supported = False
+    # True only in LiveCalibrationApp: the running Calibrator is the only one
+    # whose board can be swapped without re-running the whole folder analysis.
+    _runtime_board_supported = False
 
     def __init__(
         self,
@@ -357,6 +362,10 @@ class _BaseCalibrationApp:
         """Build the top row deciding where frames come from (subclass hook)."""
         raise NotImplementedError
 
+    def _on_board_fields_committed(self, _event=None):
+        """Live app only: apply an edited LED-grid geometry to the running rig."""
+        return "break"
+
     def _build_widgets(self):
         top = ttk.Frame(self.root, padding=8)
         top.pack(side=tk.TOP, fill=tk.X)
@@ -368,11 +377,17 @@ class _BaseCalibrationApp:
         # the default board, and the two checkboxes that used to sit here
         # (MATLAB-style slow Find Center, show plots) were pure expert knobs --
         # all of them now live in the Advanced Settings dialog.
-        # Dev-only: the whole settings row (board disclosure + Advanced
-        # Settings). The default 6x4 / 50 mm board is right for the rig, and
-        # everything else in here is something you open once, deliberately.
+        # Dev-only in the batch app: the whole settings row (board disclosure
+        # + Advanced Settings). The default 6x4 / 50 mm board is right for the
+        # rig, and everything else in here is something you open once,
+        # deliberately. Live mode shows it, because the board can be swapped
+        # while the stream is running.
         opts = ttk.Frame(self.root, padding=(8, 0, 8, 8))
-        self._register_row(self.root, [(opts, {"side": tk.TOP, "fill": tk.X}, True)])
+        self._register_row(
+            self.root,
+            [(opts, {"side": tk.TOP, "fill": tk.X},
+              not self._runtime_board_supported)],
+        )
         self.board_option_widgets = []
 
         self._board_panel_visible = False
@@ -398,11 +413,28 @@ class _BaseCalibrationApp:
         w.pack(side=tk.LEFT, padx=4)
         self.board_option_widgets.append(w)
 
+        if self._runtime_board_supported:
+            ttk.Label(
+                self.board_panel, text="applies immediately",
+                font=self.theme.font(8), foreground=self.theme.muted,
+            ).pack(side=tk.LEFT, padx=(12, 0))
+
         # The button doubles as the readout of the current geometry, so a
         # collapsed panel still tells the user what the app is assuming.
         for var in (self.n_sq_x, self.n_sq_y, self.spacing_mm):
             var.trace_add("write", lambda *_a: self._update_board_button())
         self._update_board_button()
+
+        if self._runtime_board_supported:
+            # Commit on Enter, focus-out or a spinbox arrow -- not on every
+            # keystroke of a half-typed number. The batch app keeps these as
+            # launch-time inputs, re-read by Load / Analyze.
+            for widget in self.board_option_widgets:
+                widget.bind("<Return>", self._on_board_fields_committed)
+                widget.bind("<KP_Enter>", self._on_board_fields_committed)
+                widget.bind("<FocusOut>", self._on_board_fields_committed)
+                if isinstance(widget, ttk.Spinbox):
+                    widget.configure(command=self._on_board_fields_committed)
 
         main = ttk.Frame(self.root, padding=8)
         main.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
@@ -961,16 +993,37 @@ class _BaseCalibrationApp:
         if self.set_mirror_fn is not None:
             self.set_mirror_fn(mirrored)
 
-    def _discard_samples_for_orientation_change(self, mirrored: bool) -> None:
-        """Drop the accepted samples: they describe the other orientation."""
+    def _discard_samples(self, reason: str, detail: str = "") -> None:
+        """Drop every accepted sample after the view or the target changed."""
         cal = self.calibrator
         if cal is None:
             return
 
         n_discarded = len(cal.db)
         cal.db.clear()
+        self._invalidate_calibration()
+        if n_discarded:
+            line = f"{reason}: dropped {n_discarded} sample(s)"
+            if detail:
+                line = f"{line} {detail}"
+            self._append_log(line)
+        self._update_progress_panel()
+
+    def _discard_samples_for_orientation_change(self, mirrored: bool) -> None:
+        """Drop the accepted samples: they describe the other orientation."""
+        self._discard_samples(
+            f"mirror {'on' if mirrored else 'off'}",
+            "captured in the other orientation",
+        )
+
+    def _invalidate_calibration(self, reset_view: bool = True) -> None:
+        """Make any solved model stale without touching the accepted samples."""
+        cal = self.calibrator
+        if cal is None:
+            return
         cal.calibrated = False
-        self.current_sample_index = 0
+        if reset_view:
+            self.current_sample_index = 0
         # The guide is cached per db length, and a discarded db can leave the
         # length unchanged (delete one, add one), so the cache is dropped
         # explicitly.
@@ -981,13 +1034,6 @@ class _BaseCalibrationApp:
         self.save_button.configure(state="disabled")
         self.forward_view_var.set(False)
         self._sync_forward_view_controls()
-
-        if n_discarded:
-            self._append_log(
-                f"mirror {'on' if mirrored else 'off'}: dropped {n_discarded} "
-                "sample(s) captured in the other orientation"
-            )
-        self._update_progress_panel()
 
     def _set_status(self, text):
         # No update_idletasks() here: these are called from inside after()
@@ -1762,6 +1808,8 @@ class LiveCalibrationApp(_BaseCalibrationApp):
     # The mirror switch acts on the incoming frame stream, which only the
     # live app has.
     _mirror_supported = True
+    # The live Calibrator can take a new board while the stream is running.
+    _runtime_board_supported = True
 
     def __init__(
         self,
@@ -1802,11 +1850,12 @@ class LiveCalibrationApp(_BaseCalibrationApp):
         self.mirror.set(bool(mirror))
 
         self.calibrator = calibrator
-        # Board geometry / Taylor order are fixed at node start (CLI flags);
-        # the running Calibrator cannot be re-configured mid-capture. Same
-        # for the advanced settings dialog -- it becomes view-only.
-        for widget in self.board_option_widgets:
-            widget.configure(state="disabled")
+        # The board is a capture-time input, not a launch-time constant: the
+        # fields stay editable and the running Calibrator's board is swapped
+        # in place.
+        self._sync_board_fields()
+        # Everything else in the advanced dialog is a launch-time setting of
+        # the already-built Calibrator, so it stays view-only.
         self._advanced_settings_read_only = True
 
         self._refresh_capture_button()
@@ -1825,6 +1874,99 @@ class LiveCalibrationApp(_BaseCalibrationApp):
         return self._suffixed_save_filename(
             camera_id_from_config(self.camera_id)
         )
+
+    # ------------------------------------------------------------------
+    # LED grid (runtime)
+    # ------------------------------------------------------------------
+
+    def _sync_board_fields(self) -> None:
+        """Show the running Calibrator's geometry in the editable fields."""
+        board = self.calibrator.board
+        self.n_sq_x.set(int(board.n_sq_x))
+        self.n_sq_y.set(int(board.n_sq_y))
+        self.spacing_mm.set(float(board.spacing_mm))
+        self._update_board_button()
+
+    def _on_board_fields_committed(self, _event=None):
+        """
+        Apply an edited LED-grid geometry to the running Calibrator.
+
+        A new square count changes the point grid the detector must find and
+        the solver indexes points by, so the samples collected for the old
+        grid are dropped and capture restarts from an empty database. A pitch
+        change alone keeps the same physical points, so the samples survive --
+        only the world scale changes and the user re-solves.
+        """
+        cal = self.calibrator
+        if cal is None:
+            return "break"
+
+        try:
+            board = LedGridBoard(
+                n_sq_x=int(self.n_sq_x.get()),
+                n_sq_y=int(self.n_sq_y.get()),
+                spacing_mm=float(self.spacing_mm.get()),
+            )
+        except (tk.TclError, ValueError):
+            board = None
+        if board is None or not (
+            1 <= board.n_sq_x <= 30
+            and 1 <= board.n_sq_y <= 30
+            and math.isfinite(board.spacing_mm)
+            and board.spacing_mm > 0
+        ):
+            self._sync_board_fields()
+            self._set_status(
+                "LED grid unchanged: counts must be 1-30 and spacing above 0."
+            )
+            return "break"
+
+        old = cal.board
+        if board == old:
+            self._update_board_button()
+            return "break"
+
+        if (board.n_sq_x, board.n_sq_y) != (old.n_sq_x, old.n_sq_y):
+            # Pause first: the consumer converts frames independently of the
+            # Tk thread, and one accepted after the clear would mix the two
+            # point grids in a single solve.
+            was_running = self.consumer.capturing.is_set()
+            if was_running:
+                self.consumer.capturing.clear()
+            self.consumer.wait_until_idle()
+            # Hold the conversion lock while the grid is replaced: a frame the
+            # consumer already pulled off the queue must be detected with the
+            # new board (or not at all), never accepted into the cleared db
+            # under the old one.
+            gate = getattr(self.consumer, "handle_lock", None) or nullcontext()
+            with gate:
+                self._drain_frame_queues()
+                cal.board = board
+                self._discard_samples(
+                    f"LED grid {board.n_sq_x} x {board.n_sq_y}, "
+                    f"{board.spacing_mm:g} mm",
+                    "captured for the previous grid",
+                )
+
+            if was_running:
+                self.consumer.capturing.set()
+            self._set_status(
+                f"LED grid {board.n_sq_x} x {board.n_sq_y}, "
+                f"{board.spacing_mm:g} mm spacing: capture a new set."
+            )
+        else:
+            # Same target, new pitch: keep the samples, which still describe
+            # the same points; the solved model must be rebuilt in the new
+            # units.
+            cal.board = board
+            self._invalidate_calibration(reset_view=False)
+            self._update_progress_panel()
+            self._set_status(
+                f"LED grid spacing set to {board.spacing_mm:g} mm; samples "
+                "kept -- press CALIBRATE to re-solve."
+            )
+        self._update_board_button()
+        return "break"
 
     def _build_source_controls(self, parent):
         ttk.Label(parent, text="Image topic:").grid(row=0, column=0, sticky="w")

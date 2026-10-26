@@ -59,6 +59,17 @@ The same switch is in the GUI's Advanced Settings ("Mirror incoming frames"), so
 can be flipped while a session is running. Flipping it discards the samples captured
 so far: they describe the other orientation.
 
+### Changing the LED grid during a session
+
+The grid geometry is not baked into the node. The `LED grid: 6 x 4, 50 mm
+spacing (change)` button opens the X/Y square counts and the pitch, and they
+apply to the running calibrator as soon as you press Enter, leave the field, or
+use a spinbox arrow. Changing a count changes the point grid the detector must
+find, so the samples captured for the old board are dropped and capture
+restarts from an empty set. Changing only the pitch keeps the samples -- they
+describe the same points -- and marks the solved model stale, so press
+CALIBRATE again to re-solve in the new units.
+
 ## Camera Setup and Launch
 
 `docker/calibrate.sh` is not the only way to get from "camera is plugged in" to a

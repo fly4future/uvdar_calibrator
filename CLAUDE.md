@@ -61,6 +61,7 @@ python test/test_coverage_rules.py && python test/test_plots_headless.py \
     && python test/test_forward_view.py && python test/test_guide_overlay.py \
     && python test/test_camera_wizard.py && python test/test_launch_file.py \
     && python test/test_mirror.py \
+    && python test/test_runtime_board.py \
     && python test/test_live_qos.py \
     && python test/test_live_endtoend.py && python test/test_live_mirror.py
 ```
@@ -183,6 +184,14 @@ mirror ROS's `redraw_monocular` bars. X/Y show the span the accepted samples cov
 Skew are scored against a target, so they fill by progress instead. Green at full progress.
 CALIBRATE is driven by `goodenough` (with an explicit confirm-to-override
 when not ready); SAVE/EXPORT by `calibrated`.
+
+In live mode the LED-grid row is visible and editable: X/Y counts and pitch are applied
+to the running `Calibrator` on commit (Enter, focus-out, or a spinbox arrow). A count
+change swaps the board and *drops* the accepted samples, because they index the old
+point grid; a pitch-only change keeps them and just marks the solved model stale. The
+consumer is paused and its queues are drained around a count change so a frame detected
+with the old board cannot land after the clear. `test/test_runtime_board.py` covers both
+paths and the revert on invalid input.
 
 The on-image **"put the grid here" box** (`gui.guide_box_rect` + `_draw_position_guide_on_image`)
 marks the frame cell the next photo should go into. It is drawn by *both* apps — the live
