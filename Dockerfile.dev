@@ -49,23 +49,27 @@ RUN mkdir -p /tmp/basler-camera-drivers && \
 # pypylon is used to list Basler cameras by serial number
 RUN pip3 install --break-system-packages pypylon
 
+RUN . /opt/ros/${ROS_DISTRO}/setup.sh && (rosdep init || true) && rosdep update
+
 # The Basler driver goes into its own underlay workspace, so building the mounted
 # calibrator workspace never rebuilds it
 RUN git clone --depth 1 --branch ros2 https://github.com/ctu-mrs/pylon-ros-camera.git /deps_ws/src/pylon-ros-camera
 
+RUN . /opt/ros/${ROS_DISTRO}/setup.sh && \
+    apt-get update && \
+    rosdep install --from-paths /deps_ws/src --ignore-src -r -y && \
+    rm -rf /var/lib/apt/lists/*
+
+WORKDIR /deps_ws
+RUN . /opt/ros/${ROS_DISTRO}/setup.sh && colcon build
+
 # Only package.xml is needed to resolve the calibrator's dependencies
 COPY package.xml /tmp/uvdar_calibrator/package.xml
 
-# Install the ROS dependencies of both the driver and the calibrator
 RUN . /opt/ros/${ROS_DISTRO}/setup.sh && \
-    (rosdep init || true) && rosdep update && \
     apt-get update && \
-    rosdep install --from-paths /deps_ws/src /tmp/uvdar_calibrator --ignore-src -r -y && \
+    rosdep install --from-paths /tmp/uvdar_calibrator --ignore-src -r -y && \
     rm -rf /var/lib/apt/lists/* /tmp/uvdar_calibrator
-
-# Build the driver underlay
-WORKDIR /deps_ws
-RUN . /opt/ros/${ROS_DISTRO}/setup.sh && colcon build
 
 RUN mkdir -p /ros2_ws/src /calibration_output
 WORKDIR /ros2_ws
