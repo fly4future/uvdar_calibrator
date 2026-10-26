@@ -59,6 +59,7 @@ numpy 2:
 source calibrator/bin/activate
 python test/test_coverage_rules.py && python test/test_plots_headless.py \
     && python test/test_forward_view.py && python test/test_guide_overlay.py \
+    && python test/test_camera_wizard.py && python test/test_launch_file.py \
     && python test/test_mirror.py \
     && python test/test_live_qos.py \
     && python test/test_live_endtoend.py && python test/test_live_mirror.py
@@ -79,10 +80,11 @@ uvdar_calibrator/
 ├── diagnostics/
 │   ├── plots.py              # matplotlib diagnostics: build figures, never show them
 │   └── plot_window.py        # one Tk window, one tab per figure (the only Tk outside apps/)
-└── apps/                   # the three ways to drive the engine (+ a test publisher)
+└── apps/                   # the ways to drive the engine (+ a test publisher)
     ├── gui.py                 # Tkinter app: feeds photos (or live frames) into Calibrator, live range bars
     ├── cli.py                  # argparse entry point (offline/batch, calibrate_offline console_script)
     ├── live_node.py            # ROS 2 node: live topic capture (cameracalibrator console_script)
+    ├── camera_wizard.py        # camera detection + config/tmux setup (docker/calibrate.sh, setup_camera)
     └── replay_publisher.py     # ROS 2 node: replay a photo folder onto an Image topic (replay_images)
 ```
 
@@ -202,6 +204,43 @@ the rim, while the magnification penalty `1/tan(hfov/2)` shrinks the pattern you
 (0.18× at 160°, which renders as an hourglass with a smudge in the middle). Hence the fixed
 `DEFAULT_FORWARD_VIEW_HFOV_DEG = 90.0`; showing everything would need a non-rectilinear
 projection, which would not straighten lines and so would not serve the check.
+
+### Camera setup (`apps/camera_wizard.py`)
+
+Backs `docker/calibrate.sh` (which is now only a `python -m` shim with
+`--repo-root`) and carries the logic that used to live in bash there. It finds
+the attached camera, fills the templates under `config/<type>/`, and starts
+`config/run-tmux.sh`. The templates remain the **source of truth** for driver
+parameters, FOV/mirroring and everything else that is a property of the rig;
+the wizard only writes what a template cannot know (serial number, device-tree
+path, topic suffix).
+
+Detection identifies a *device and its driver*, never the lens, and it is
+conservative on purpose: exactly one camera is used without a prompt; several
+of one family or several families require `--device`/`--camera` (or an
+interactive answer); with `--yes` it fails instead of guessing. A wrongly
+configured camera calibrates silently, so an explicit `--device` is also
+allowed to name an undetected camera (e.g. a GigE Basler not visible without
+host networking); `kind_for_device` lets a *detected* identifier pick the
+family when `--camera` is `auto`. `detect_cameras` takes its sysfs root, device-tree prefix and
+Basler enumerator as arguments so tests never need real hardware; the
+libcamera probe keeps the sysfs `i2c ∩ media` heuristic and falls back to all
+device-tree nodes when nothing pairs up. `test/test_camera_wizard.py` checks
+the probe, the selection rules and that generated configs still match the
+templates (including placeholder substitution).
+
+`launch/calibrate.launch.py` is the non-Docker sibling: `ros2 launch
+uvdar_calibrator calibrate.launch.py camera:=auto` calls the same
+`detect_cameras`/`resolve_*`/`prepare_*` functions, seeds the *installed*
+templates into a writable `config_dir` (`~/.ros/uvdar_calibrator/config`),
+includes the driver launch and remaps `image` to `PreparedCamera.topic`. It
+never prompts (`camera:=auto` fails when the choice is not unique). This
+environment has no `launch`/`launch_ros`, so it is only `py_compile`/flake8
+guarded; its driver arguments mirror the tmux session templates, which remain
+the source of truth.
+
+Note `n_sq_x`/`n_sq_y` in the board config are unrelated to the camera side
+configs `config/<camera>/`; don't confuse the two directories.
 
 ### Coordinate/order conventions to keep straight
 

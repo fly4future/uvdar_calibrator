@@ -58,3 +58,35 @@ ros2 run uvdar_calibrator cameracalibrator --mirror image:=/camera/image_raw
 The same switch is in the GUI's Advanced Settings ("Mirror incoming frames"), so it
 can be flipped while a session is running. Flipping it discards the samples captured
 so far: they describe the other orientation.
+
+## Camera Setup and Launch
+
+`docker/calibrate.sh` is not the only way to get from "camera is plugged in" to a
+running calibrator. The same detection and the same `config/<type>/` templates back a
+launch file that starts the driver and the GUI directly, without Docker or tmux:
+
+```bash
+ros2 launch uvdar_calibrator calibrate.launch.py camera:=auto
+ros2 launch uvdar_calibrator calibrate.launch.py camera:=libcamera suffix:=down
+ros2 launch uvdar_calibrator calibrate.launch.py camera:=basler device:=12345678
+```
+
+It detects the camera (exactly like the Docker wizard), writes the generated configs
+under `~/.ros/uvdar_calibrator/config` (the installed share tree is never modified),
+then starts `libcamera_ros_driver` or `pylon_ros2_camera_wrapper` with those configs
+and `cameracalibrator` remapped to the topic that driver publishes. Exports default
+to `~/.ros/uvdar_calibrator/output`; override with `config_dir:=` / `output_dir:=`.
+
+`camera:=auto` never prompts: it picks the only camera it finds and fails, listing
+what it saw, when the choice is not unique. Pass `camera:=` and/or `device:=` then.
+A detected `device:=` implies its family, so a serial is enough even with two camera
+kinds plugged in; an undetected device (a GigE Basler without host networking, for
+instance) needs `camera:=` too, because nothing else can know what it is. For a driver that
+delivers a mirrored image, add `mirror:=true`.
+
+The two driver packages are environment-specific, so they are not ROS dependencies of
+this package: install `ros-<distro>-libcamera-ros-driver` for libcamera, or build
+[ctu-mrs/pylon-ros-camera](https://github.com/ctu-mrs/pylon-ros-camera) (branch
+`ros2`) for Basler. The launch file also starts no RMW daemon — use the ROS
+environment you normally run. Inside the Docker image, `docker/calibrate.sh` remains
+the entry point and additionally manages the tmux session.

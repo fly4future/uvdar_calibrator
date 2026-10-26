@@ -23,6 +23,11 @@
   <!-- optional at runtime (.mat export only), simplest as a plain depend -->
   <depend>python3-scipy</depend>
 
+  <!-- launch/calibrate.launch.py -->
+  <exec_depend>ament_index_python</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+
   <!-- Deliberately NOT depended on, unlike upstream camera_calibration:
        message_filters (stereo time-sync only; this tool is monocular) and
        image_geometry (its PinholeCameraModel cannot represent the OCamCalib
