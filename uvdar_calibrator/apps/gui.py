@@ -216,6 +216,10 @@ class _BaseCalibrationApp:
     #TODO do we want them in advance settings? how often are they really used
     _has_file_filters = False
 
+    # True only in LiveCalibrationApp: the mirror switch acts on the incoming
+    # frame stream, which only the live app has.
+    _mirror_supported = False
+
     def __init__(
         self,
         root,
@@ -265,6 +269,12 @@ class _BaseCalibrationApp:
         self._advanced_settings_read_only = False
         self.show_plots = tk.BooleanVar(value=False)
         self.forward_view_var = tk.BooleanVar(value=False)
+        # Live mode only: flip the incoming frames left-right. Seeded from
+        # --mirror and switchable at runtime in the Advanced Settings
+        # dialog. set_mirror_fn is None in the batch app, which has no
+        # incoming stream to flip.
+        self.mirror = tk.BooleanVar(value=False)
+        self.set_mirror_fn = None
         # Rectilinear FOV. Wider shows more of the frame but adds black corners:
         # a rectilinear projection breaks down past ~90 deg off-axis.
         self.forward_view_hfov = tk.DoubleVar(
@@ -809,6 +819,37 @@ class _BaseCalibrationApp:
         dialog_vars += [save_previews_var, slow_center_var, show_plots_var]
         self._dialog_vars = dialog_vars
 
+        if self._mirror_supported:
+            # The mirror acts on the incoming frame stream, not on the
+            # running Calibrator, so it stays editable even in the
+            # read-only (live) dialog -- deliberately not in
+            # interactive_widgets.
+            ttk.Separator(body, orient=tk.HORIZONTAL).grid(
+                row=row, column=0, columnspan=3, sticky="ew", pady=8
+            )
+            row += 1
+            ttk.Label(
+                body, text="Incoming frames", font=self.theme.font(9, "bold"),
+            ).grid(row=row, column=0, columnspan=3, sticky="w", pady=(0, 4))
+            row += 1
+            ttk.Checkbutton(
+                body,
+                text="Mirror incoming frames (flip left-right)",
+                variable=self.mirror,
+                command=self._on_mirror_toggled,
+            ).grid(row=row, column=0, columnspan=3, sticky="w")
+            row += 1
+            ttk.Label(
+                body,
+                text=(
+                    "for cameras whose driver delivers a mirrored image; the "
+                    "preview, the detection and the saved model all use the "
+                    "mirrored view"
+                ),
+                font=self.theme.font(8), foreground=self.theme.muted, wraplength=360,
+            ).grid(row=row, column=0, columnspan=3, sticky="w")
+            row += 1
+
         if read_only:
             for widget in interactive_widgets:
                 widget.configure(state="disabled")
@@ -816,7 +857,8 @@ class _BaseCalibrationApp:
                 body,
                 text=(
                     "Read-only: this live session's Calibrator is already running "
-                    "and can't be reconfigured mid-capture."
+                    "and can't be reconfigured mid-capture. The mirror switch "
+                    "above still applies to incoming frames."
                 ),
                 font=self.theme.font(8, "italic"), foreground=self.theme.bad, wraplength=360,
             ).grid(row=row, column=0, columnspan=3, sticky="w", pady=(10, 0))
@@ -897,6 +939,55 @@ class _BaseCalibrationApp:
 
         dialog.grab_set()
         dialog.wait_window()
+
+    # ------------------------------------------------------------------
+    # Mirroring the incoming frames
+    # ------------------------------------------------------------------
+
+    def _on_mirror_toggled(self):
+        """
+        Apply the mirror switch to the incoming frames.
+
+        Flipping the stream changes the orientation of every frame, so the
+        samples accepted so far no longer describe the same view as the new
+        ones: they are dropped rather than silently mixed into one solve.
+        """
+        mirrored = bool(self.mirror.get())
+        self._apply_mirror(mirrored)
+        self._discard_samples_for_orientation_change(mirrored)
+
+    def _apply_mirror(self, mirrored: bool) -> None:
+        """Hand the new orientation to whoever produces the frames."""
+        if self.set_mirror_fn is not None:
+            self.set_mirror_fn(mirrored)
+
+    def _discard_samples_for_orientation_change(self, mirrored: bool) -> None:
+        """Drop the accepted samples: they describe the other orientation."""
+        cal = self.calibrator
+        if cal is None:
+            return
+
+        n_discarded = len(cal.db)
+        cal.db.clear()
+        cal.calibrated = False
+        self.current_sample_index = 0
+        # The guide is cached per db length, and a discarded db can leave the
+        # length unchanged (delete one, add one), so the cache is dropped
+        # explicitly.
+        self._guide_db_len = -1
+        self._forward_view_cache = None
+        self._forward_view_model_id = None
+        self._forward_view_key = None
+        self.save_button.configure(state="disabled")
+        self.forward_view_var.set(False)
+        self._sync_forward_view_controls()
+
+        if n_discarded:
+            self._append_log(
+                f"mirror {'on' if mirrored else 'off'}: dropped {n_discarded} "
+                "sample(s) captured in the other orientation"
+            )
+        self._update_progress_panel()
 
     def _set_status(self, text):
         # No update_idletasks() here: these are called from inside after()
@@ -1668,6 +1759,10 @@ class LiveCalibrationApp(_BaseCalibrationApp):
 
     POLL_MS = 50
 
+    # The mirror switch acts on the incoming frame stream, which only the
+    # live app has.
+    _mirror_supported = True
+
     def __init__(
         self,
         root,
@@ -1678,6 +1773,8 @@ class LiveCalibrationApp(_BaseCalibrationApp):
         subscribe_fn,
         initial_topic: str = "image",
         camera_id: str = "",
+        mirror: bool = False,
+        set_mirror_fn=None,
         **kwargs,
     ):
         self.result_queue = result_queue
@@ -1698,6 +1795,11 @@ class LiveCalibrationApp(_BaseCalibrationApp):
         self._fps = 0.0
         self._stale_warned = False
         super().__init__(root, **kwargs)
+
+        # The base class creates the mirror state; the live node owns the
+        # actual flip, so it gets the switch and the initial value.
+        self.set_mirror_fn = set_mirror_fn
+        self.mirror.set(bool(mirror))
 
         self.calibrator = calibrator
         # Board geometry / Taylor order are fixed at node start (CLI flags);
@@ -1758,6 +1860,49 @@ class LiveCalibrationApp(_BaseCalibrationApp):
             self.consumer.capturing.set()
             self._set_status(f"Live capture running on topic '{self._subscribed_topic}'.")
         self._refresh_capture_button()
+
+    def _on_mirror_toggled(self):
+        """
+        Switch the frame orientation with no frame of the old one left over.
+
+        The consumer thread pulls frames off the raw queue independently of
+        the GUI, so a frame converted before the switch could still be
+        accepted afterwards and mix two orientations in a single solve.
+        Capture is therefore paused for the switch, the queues are drained,
+        and capture resumes.
+        """
+        mirrored = bool(self.mirror.get())
+        was_running = self.consumer.capturing.is_set()
+        if was_running:
+            self.consumer.capturing.clear()
+        self.consumer.wait_until_idle()
+        self._drain_frame_queues()
+
+        self._apply_mirror(mirrored)
+        self._discard_samples_for_orientation_change(mirrored)
+
+        if was_running:
+            self.consumer.capturing.set()
+        self._set_status(
+            f"Live capture on '{self._subscribed_topic}': incoming frames are "
+            f"{'mirrored' if mirrored else 'not mirrored'}."
+        )
+
+    def _drain_frame_queues(self) -> None:
+        """Throw away frames converted under the previous orientation."""
+        raw_queue = getattr(self.consumer, "raw_queue", None)
+        for q in (raw_queue, self.result_queue, self.preview_queue):
+            if q is None:
+                continue
+            while True:
+                try:
+                    q.get_nowait()
+                except queue.Empty:
+                    break
+        # Corners come from a throttled frame, so they may belong to a frame
+        # that is no longer current.
+        self._latest_corners = None
+        self._latest_preview = None
 
     def _poll_queue(self):
         """
@@ -1882,6 +2027,8 @@ def launch_live_gui(
     output_dir: str = ".",
     slow_find_center: bool = False,
     dev_mode: bool = False,
+    mirror: bool = False,
+    set_mirror_fn=None,
 ) -> None:
     """Launch the live (ROS 2 topic-driven) calibration GUI."""
     _require_gui_deps()
@@ -1904,5 +2051,7 @@ def launch_live_gui(
         output_dir=output_dir,
         slow_find_center=slow_find_center,
         dev_mode=dev_mode,
+        mirror=mirror,
+        set_mirror_fn=set_mirror_fn,
     )
     root.mainloop()

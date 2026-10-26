@@ -64,7 +64,7 @@ from .cli import add_sample_selection_args, sample_selection_config_kwargs
 from .gui import launch_live_gui
 from ..engine.board import LedGridBoard
 from ..engine.calibrator import Calibrator, CalibratorConfig
-from ..engine.detection import PREVIEW_DIR_NAME
+from ..engine.detection import PREVIEW_DIR_NAME, mirror_horizontal
 
 DEFAULT_RATE_HZ = 2.0
 # A live session has no natural stopping point the way a folder of photos
@@ -181,11 +181,16 @@ class CalibrationSubscriberNode(Node):
         preview_queue: Queue,
         image_topic: str = "image",
         max_dimension: Optional[int] = None,
+        mirror: bool = False,
     ):
         super().__init__("uvdar_cameracalibrator")
         self.raw_queue = raw_queue
         self.preview_queue = preview_queue
         self.max_dimension = int(max_dimension) if max_dimension else None
+        # Flip incoming frames left-right. Applied in mkgray(), before the
+        # frame reaches either queue, so the preview, the detection and the
+        # stored sample all describe the same view.
+        self.mirror = bool(mirror)
         self.bridge = cv_bridge.CvBridge()
         self._sub = None
         self.subscribe(image_topic)
@@ -207,6 +212,23 @@ class CalibrationSubscriberNode(Node):
     @property
     def resolved_topic(self) -> str:
         return self._sub.topic_name if self._sub is not None else "image"
+
+    def set_mirror(self, enabled: bool) -> None:
+        """
+        Turn the left-right flip of incoming frames on or off, at runtime.
+
+        Read by ``mkgray`` on the ROS callback thread; a bool assignment is
+        atomic under the GIL, so no lock is needed. Frames already in flight
+        keep the orientation they arrived with -- the next frame defines the
+        new one.
+        """
+        enabled = bool(enabled)
+        if enabled == self.mirror:
+            return
+        self.mirror = enabled
+        self.get_logger().info(
+            f"Incoming frames are now {'mirrored' if enabled else 'not mirrored'}"
+        )
 
     def _on_image(self, msg: sensor_msgs.msg.Image) -> None:
         try:
@@ -230,6 +252,10 @@ class CalibrationSubscriberNode(Node):
         both axes, so aspect ratio -- and therefore calibration geometry --
         is preserved) so the longer side doesn't exceed it, reducing
         detection cost on high-resolution cameras.
+
+        If ``mirror`` is set, the frame is flipped left-right before it is
+        returned, so a driver that delivers a mirrored image is handled the
+        same way everywhere downstream.
         """
         # as cv_bridge automatically scales, we need to remove that behavior
         if self.bridge.encoding_to_dtype_with_channels(msg.encoding)[0] in ["uint16", "int16"]:
@@ -254,6 +280,13 @@ class CalibrationSubscriberNode(Node):
                 scale = self.max_dimension / float(longest)
                 new_size = (max(1, round(width * scale)), max(1, round(height * scale)))
                 gray = cv2.resize(gray, new_size, interpolation=cv2.INTER_AREA)
+
+        if self.mirror:
+            # Flip before the frame reaches the queues: the preview, the
+            # detection and the stored sample must all describe the same
+            # view, and a uniform resize commutes with the flip, so doing
+            # it last is cheapest.
+            gray = mirror_horizontal(gray)
 
         return gray
 
@@ -350,6 +383,14 @@ def _build_arg_parser() -> argparse.ArgumentParser:
                        "by default (range bars, coverage graph, sample log, "
                        "settings). Also toggle in-app with Ctrl+D."
                    ))
+    p.add_argument("--mirror", action="store_true",
+                   help=(
+                    "Mirror (flip left-right) the incoming frames before they "
+                    "are shown and detected, for cameras whose driver delivers "
+                    "a mirrored image. The model that comes out describes the "
+                    "mirrored view. Can be switched at runtime from the GUI's "
+                    "Advanced Settings. Default: off."
+                    ))
     add_sample_selection_args(p)
     return p
 
@@ -387,6 +428,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         preview_queue,
         image_topic="image",
         max_dimension=args.max_dimension,
+        mirror=args.mirror,
     )
 
     spin_thread = SpinThread(node)
@@ -407,6 +449,8 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
             camera_id=args.camera_id,
             output_dir=args.output_dir,
             dev_mode=args.dev,
+            mirror=args.mirror,
+            set_mirror_fn=node.set_mirror,
         )
     finally:
         consumer.stop()

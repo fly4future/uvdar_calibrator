@@ -42,6 +42,14 @@ ros2 run uvdar_calibrator replay_images --image_dir example_images   # shell 1
 ros2 run uvdar_calibrator cameracalibrator image:=/image             # shell 2
 ```
 
+Some camera drivers deliver a left-right flipped image. `--mirror` flips the incoming
+frames back before anything else sees them, and the live GUI's "Mirror incoming frames"
+switch (Advanced Settings) does the same at runtime:
+
+```bash
+ros2 run uvdar_calibrator cameracalibrator --mirror image:=/image
+```
+
 `test/test_live_endtoend.py` drives that same pair in one process (no GUI) and asserts frames
 survive the round trip into accepted samples. Run the checks with the project venv, since the
 ROS stack is built against numpy 1.x and `cv_bridge` segfaults rather than raising under
@@ -50,8 +58,10 @@ numpy 2:
 ```bash
 source calibrator/bin/activate
 python test/test_coverage_rules.py && python test/test_plots_headless.py \
-    && python test/test_forward_view.py && python test/test_live_qos.py \
-    && python test/test_live_endtoend.py
+    && python test/test_forward_view.py && python test/test_guide_overlay.py \
+    && python test/test_mirror.py \
+    && python test/test_live_qos.py \
+    && python test/test_live_endtoend.py && python test/test_live_mirror.py
 ```
 
 ## Architecture
@@ -210,3 +220,14 @@ projection, which would not straighten lines and so would not serve the check.
   pairing. `Calibrator.cal_fromcorners`'s initial guess is correctly `xc=height/2.0,
   yc=width/2.0`, not the other way around; this has been verified by tracing the pairing through
   every solver function that reads it.
+- **Mirroring the live input** (`--mirror`, or the live GUI's "Mirror incoming frames" switch)
+  flips the frame in `live_node.mkgray`, *before* it reaches either queue, so the preview, the
+  detection, the coverage advice and the saved model all describe the same (mirrored) view.
+  The detector labels the grid in image order, so a mirrored frame reads the board with the
+  axis that runs horizontally in that photo reversed — one of the four symmetries of the point
+  grid, which the per-image rotation `R` in the solve absorbs. A *transposed* reading would
+  not be absorbable (the 6×4 board is not a 4×6 board) and would show up as a large
+  reprojection error. `detection.mirror_horizontal` uses `cv2.flip` rather than `img[:, ::-1]`
+  on purpose: the numpy view has negative strides (which OpenCV refuses) and still aliases the
+  caller's buffer — and the live path shares one array between the preview queue, the
+  detection queue and `Sample.image`.

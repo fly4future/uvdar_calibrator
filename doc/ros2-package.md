@@ -44,3 +44,17 @@ There is no `SetCameraInfo` upload step: `sensor_msgs/CameraInfo`'s distortion m
 have no slot for the OCamCalib polynomial, so the result stays a local file
 (`calib_results.txt`, written wherever the save dialog points), same as the offline
 path.
+
+### Mirrored cameras
+
+Some drivers deliver a left-right flipped image. `--mirror` flips the incoming frames
+back before the preview, the detection and the saved model ever see them, so the
+calibration describes the camera rather than the flipped stream:
+
+```bash
+ros2 run uvdar_calibrator cameracalibrator --mirror image:=/camera/image_raw
+```
+
+The same switch is in the GUI's Advanced Settings ("Mirror incoming frames"), so it
+can be flipped while a session is running. Flipping it discards the samples captured
+so far: they describe the other orientation.

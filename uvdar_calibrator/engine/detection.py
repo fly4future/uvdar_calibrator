@@ -138,6 +138,25 @@ def _read_image_gray(path: str) -> np.ndarray:
 read_image_gray = _read_image_gray
 
 
+def mirror_horizontal(img: np.ndarray) -> np.ndarray:
+    """
+    Flip an image left-right and return a new, contiguous array.
+
+    ``cv2.flip`` rather than ``img[:, ::-1]`` on purpose: the numpy view has
+    negative strides, which OpenCV refuses and which still aliases the
+    caller's buffer. The live path hands the *same* array to the preview
+    queue, the detection queue and ``Sample.image``, so an in-place flip
+    would rewrite the pixels of already-accepted samples while their
+    recorded corner coordinates still describe the old orientation.
+    """
+    if cv2 is None:
+        raise RuntimeError(
+            "OpenCV is required for mirroring. Run: pip install opencv-python"
+        )
+
+    return cv2.flip(img, 1)
+
+
 def save_detected_marker_preview(img, pts_row_col, output_path):
     """
     Save a preview image showing detected marker points.
