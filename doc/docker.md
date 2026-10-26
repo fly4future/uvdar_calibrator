@@ -39,4 +39,15 @@ cd uvdar_calibrator
 ./docker-dev.sh
 ```
 
-`docker-dev.sh` builds the image (`docker build -t uvdar_calibrator .`) and runs it with the same flags as above.
+`docker-dev.sh` builds the development image (`Dockerfile.dev`) and opens a shell in it via `compose.dev.yaml`,
+with the same flags as above. Your checkout is mounted at `/ros2_ws/src/uvdar_calibrator` and is not built
+automatically. Inside the container (in `/ros2_ws`):
+
+```bash
+colcon build --symlink-install   # build the mounted calibrator
+source install/setup.bash        # only needed after the first build
+src/uvdar_calibrator/docker/calibrate.sh   # the camera calibration wizard
+```
+
+To build and run the production image locally instead, use `docker build -t uvdar_calibrator .` and the `docker run`
+command above with `uvdar_calibrator` as the image.

@@ -1,0 +1,28 @@
+services:
+  dev:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    image: uvdar_calibrator:dev
+    network_mode: host
+    privileged: true
+    stdin_open: true
+    tty: true
+    environment:
+      - DISPLAY
+      - HOST_UID=${HOST_UID:-1000}
+      - HOST_GID=${HOST_GID:-1000}
+    volumes:
+      - .:/ros2_ws/src/uvdar_calibrator
+      - ./calibration_output:/calibration_output
+      - /tmp/.X11-unix:/tmp/.X11-unix
+      - /dev:/dev
+
+      - ros2_ws_build:/ros2_ws/build
+      - ros2_ws_install:/ros2_ws/install
+      - ros2_ws_log:/ros2_ws/log
+
+volumes:
+  ros2_ws_build:
+  ros2_ws_install:
+  ros2_ws_log:

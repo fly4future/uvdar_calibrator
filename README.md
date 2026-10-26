@@ -62,5 +62,5 @@ ros2 run uvdar_calibrator cameracalibrator image:=/camera/image_raw
   coverage-only mode
 - [Running as a ROS 2 Package](doc/ros2-package.md) — colcon build, live
   `cameracalibrator` node
-- [Running in Docker](doc/docker.md) — pull and run the prebuilt image, or
-  build locally for development
+- [Running in Docker](doc/docker.md) — pull and run the prebuilt image, build it
+  locally, or use the development container that mounts your checkout

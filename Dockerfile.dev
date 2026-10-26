@@ -1,0 +1,78 @@
+ARG ROS_DISTRO=jazzy
+ARG MRS_VERSION=stable_26_10_04
+ARG TARGETPLATFORM
+
+ARG PYLON_AMD64_URL=https://downloads-bsl.baslerweb.com/software/pylon%2026.02/pylon-26.02.1_linux-x86_64_debs.tar.gz
+ARG PYLON_ARM64_URL=https://downloads-ctf.baslerweb.com/dg51pdwahxgw/6EUPou5YlZl6ZRZ1jxRaju/52f50198a52d4dfe42a35ef60b3dedb3/pylon-26.02.1_linux-aarch64_debs.tar.gz
+ARG PYLON_SUPPLEMENTARY_AMD64_URL=https://downloads-ctf.baslerweb.com/dg51pdwahxgw/1SEETUq8OWph5FCGgdtgKV/42f1b4b97db98eaf3b552345cf2c8031/pylon-supplementary-package-for-blaze-1.7.3.73dbe706a_amd64.deb
+ARG PYLON_SUPPLEMENTARY_ARM64_URL=https://downloads-ctf.baslerweb.com/dg51pdwahxgw/rS4LtLwhOsISlqjWeMKnY/a0fd95ed967c92bd5d928b77e1955db8/pylon-supplementary-package-for-blaze-1.7.3.73dbe706a_arm64.deb
+
+FROM ctumrs/mrs_uav_system:${MRS_VERSION}
+
+ARG ROS_DISTRO
+ARG TARGETPLATFORM
+ARG PYLON_AMD64_URL
+ARG PYLON_ARM64_URL
+ARG PYLON_SUPPLEMENTARY_AMD64_URL
+ARG PYLON_SUPPLEMENTARY_ARM64_URL
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV LANG=C.UTF-8
+ENV LC_ALL=C.UTF-8
+ENV TERM=xterm-256color
+ENV COLORTERM=truecolor
+ENV RCUTILS_COLORIZED_OUTPUT=1
+ENV PYTHONDONTWRITEBYTECODE=1
+
+# Download the Basler Pylon SDK (.debs tars) for the target platform. TARGETPLATFORM is set automatically by buildkit
+RUN mkdir -p /tmp/basler-camera-drivers && \
+    case "${TARGETPLATFORM:-linux/$(dpkg --print-architecture)}" in \
+      "linux/amd64") curl -fsSL "${PYLON_AMD64_URL}" | tar -xzf - -C /tmp/basler-camera-drivers && curl -fsSL "${PYLON_SUPPLEMENTARY_AMD64_URL}" --output /tmp/basler-camera-drivers/supplementary.deb ;; \
+      "linux/arm64") curl -fsSL "${PYLON_ARM64_URL}" | tar -xzf - -C /tmp/basler-camera-drivers && curl -fsSL "${PYLON_SUPPLEMENTARY_ARM64_URL}" --output /tmp/basler-camera-drivers/supplementary.deb ;; \
+      *) echo "Unsupported platform: ${TARGETPLATFORM}" && exit 1 ;; \
+    esac && \
+    ls /tmp/basler-camera-drivers && \
+    apt-get update && apt-get install -y --no-install-recommends \
+    software-properties-common \
+    ca-certificates \
+    bash-completion \
+    build-essential \
+    git \
+    tmux \
+    tmuxinator \
+    python3-pip \
+    python3-pytest \
+    ros-${ROS_DISTRO}-libcamera-ros-driver \
+    /tmp/basler-camera-drivers/*.deb \
+    && rm -rf /tmp/basler-camera-drivers /var/lib/apt/lists/*
+
+# pypylon is used to list Basler cameras by serial number
+RUN pip3 install --break-system-packages pypylon
+
+# The Basler driver goes into its own underlay workspace, so building the mounted
+# calibrator workspace never rebuilds it
+RUN git clone --depth 1 --branch ros2 https://github.com/ctu-mrs/pylon-ros-camera.git /deps_ws/src/pylon-ros-camera
+
+# Only package.xml is needed to resolve the calibrator's dependencies
+COPY package.xml /tmp/uvdar_calibrator/package.xml
+
+# Install the ROS dependencies of both the driver and the calibrator
+RUN . /opt/ros/${ROS_DISTRO}/setup.sh && \
+    (rosdep init || true) && rosdep update && \
+    apt-get update && \
+    rosdep install --from-paths /deps_ws/src /tmp/uvdar_calibrator --ignore-src -r -y && \
+    rm -rf /var/lib/apt/lists/* /tmp/uvdar_calibrator
+
+# Build the driver underlay
+WORKDIR /deps_ws
+RUN . /opt/ros/${ROS_DISTRO}/setup.sh && colcon build
+
+RUN mkdir -p /ros2_ws/src /calibration_output
+WORKDIR /ros2_ws
+
+# Source ROS and the driver underlay, plus the calibrator workspace once it has been built
+RUN echo "source /opt/ros/${ROS_DISTRO}/setup.bash" >> /root/.bashrc && \
+    echo "source /deps_ws/install/setup.bash" >> /root/.bashrc && \
+    echo "[ -f /ros2_ws/install/setup.bash ] && source /ros2_ws/install/setup.bash" >> /root/.bashrc
+
+CMD ["bash"]
