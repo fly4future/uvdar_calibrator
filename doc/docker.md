@@ -97,7 +97,8 @@ cd uvdar_calibrator
 
 `docker-dev.sh` builds the development image (`Dockerfile.dev`) and opens a shell in it via `compose.dev.yaml`,
 with the same flags as above. Your checkout is mounted at `/ros2_ws/src/uvdar_calibrator` and is not built
-automatically. Inside the container (in `/ros2_ws`):
+automatically. The wizard itself needs no build (it runs from the mounted source through
+`PYTHONPATH`), so only rebuild after touching the ROS nodes or the GUI. Inside the container (in `/ros2_ws`):
 
 ```bash
 colcon build --symlink-install   # build the mounted calibrator

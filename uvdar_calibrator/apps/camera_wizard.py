@@ -30,6 +30,7 @@ from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 DEFAULT_SYSFS_ROOT = "/sys"
 DEFAULT_DT_PREFIX = "/sys/firmware/devicetree"
+DEFAULT_OUTPUT_DIR = "/calibration_output"
 
 # Placeholders the session templates use; the wizard substitutes them.
 _PLACEHOLDER_CAMERA_ID = "__CAMERA_ID__"
@@ -469,6 +470,49 @@ def _handle_termination(signum, frame) -> None:
     raise SystemExit(130)
 
 
+def _env_id(name: str, fallback: int) -> int:
+    """Integer value of an environment variable, or ``fallback``."""
+    raw = os.environ.get(name, "").strip()
+    try:
+        return int(raw) if raw else fallback
+    except ValueError:
+        return fallback
+
+
+def _fix_output_ownership(output_dir: Optional[Path] = None) -> None:
+    """Hand root-created files to the host user (containers run as root).
+
+    The container is root because it needs device and X11 access, so anything
+    written into the mounted output directory is root-owned on the host.
+    ``HOST_UID``/``HOST_GID`` (set by ``docker-dev.sh``) say who it belongs to;
+    without them the owner of the mounted directory is used. A no-op anywhere
+    but Linux, where this problem exists.
+    """
+    if not hasattr(os, "geteuid") or os.geteuid() != 0:
+        return
+    target = Path(output_dir or os.environ.get("OUTPUT_DIR", DEFAULT_OUTPUT_DIR))
+    try:
+        stat_result = target.stat()
+    except OSError:
+        return
+    uid = _env_id("HOST_UID", stat_result.st_uid)
+    gid = _env_id("HOST_GID", stat_result.st_gid)
+    if uid == 0:
+        print(
+            f"NOTE: {target} is owned by root; pass -e HOST_UID=$(id -u) "
+            "-e HOST_GID=$(id -g) to get files owned by you.",
+            file=sys.stderr,
+        )
+        return
+    for path in (target, *target.rglob("*")):
+        try:
+            if path.lstat().st_uid != 0:
+                continue
+            os.chown(path, uid, gid, follow_symlinks=False)
+        except OSError:
+            continue
+
+
 def _kill_stale_session() -> None:
     try:
         subprocess.run(
@@ -652,6 +696,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         _kill_stale_session()
         print("Aborted.", file=sys.stderr)
         return 130
+    finally:
+        _fix_output_ownership()
 
 
 if __name__ == "__main__":
