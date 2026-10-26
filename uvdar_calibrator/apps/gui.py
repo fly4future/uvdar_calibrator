@@ -33,6 +33,16 @@ from ..engine import ocam_model
 from ..engine.board import LedGridBoard
 from ..engine.calibrator import Calibrator
 from ..engine.detection import PATTERN_CHESSBOARD, PATTERN_LED_GRID
+from .exposure import (
+    SLIDER_STEPS,
+    exposure_bounds,
+    format_exposure,
+    remember_bounds,
+    remember_exposure,
+    sanitize_bounds,
+    slider_position,
+    slider_value,
+)
 
 try:
     import cv2
@@ -214,8 +224,22 @@ class LiveCalibrationApp:
         mirror: bool = False,
         set_mirror_fn=None,
         output_dir: str = ".",
+        exposure_initial: float | None = None,
+        request_exposure_fn=None,
     ):
         board = calibrator.board
+        # Exposure control (libcamera): the card is built only when the node
+        # gave us a topic to publish on. The remembered value is sent once the
+        # camera is running, not at construction (the driver may not be up yet).
+        self.exposure_initial = exposure_initial
+        self.request_exposure_fn = request_exposure_fn
+        self._exposure_applied = (
+            float(exposure_initial) if exposure_initial is not None else None
+        )
+        self._exposure_bounds = exposure_bounds()
+        self._exposure_synced = (
+            request_exposure_fn is None or exposure_initial is None
+        )
 
         self.result_queue = result_queue
         self.preview_queue = preview_queue
@@ -477,6 +501,11 @@ class LiveCalibrationApp:
         self.readiness_verdict.pack(anchor="center", pady=(8, 2))
         self.readiness_action.pack(anchor="center")
         self.readiness_detail.pack(anchor="center", pady=(4, 10))
+        # Only when the node wired in a runtime exposure topic; it sits above
+        # the diagnostics because exposure is a capture control.
+        exposure_card = self._build_exposure_card(sidebar)
+        if exposure_card is not None:
+            exposure_card.pack(anchor="w", fill="x", pady=(0, 10))
         self.bar_canvas.pack(anchor="center", pady=(0, 10))
         coverage_title.pack(anchor="center")
         self.coverage_canvas.pack(anchor="center", pady=(4, 10))
@@ -1369,6 +1398,158 @@ class LiveCalibrationApp:
         label = "checkerboard" if pattern == PATTERN_CHESSBOARD else "UV LED grid"
         self._set_status(f"Detecting a {label}: capture a new set.")
 
+    # ------------------------------------------------------------------
+    # Exposure (libcamera)
+    # ------------------------------------------------------------------
+
+    def _build_exposure_card(self, parent):
+        """
+        Slider + min/max for the driver exposure, live only.
+
+        The driver applies ``<camera>/expose_us`` at runtime, so letting go of
+        the slider changes the running camera; the values are microseconds and
+        the slider is logarithmic because the useful range spans four decades.
+        Min/max are user bounds, not the sensor's limits (neither driver
+        reports those before opening the camera).
+        """
+        if self.exposure_initial is None or self.request_exposure_fn is None:
+            return None
+
+        lo, hi = self._exposure_bounds
+        # The value the camera currently uses must be reachable on the slider,
+        # even when narrower bounds were remembered from an earlier run.
+        lo, hi = min(lo, float(self.exposure_initial)), max(hi, float(self.exposure_initial))
+        self._exposure_bounds = (lo, hi)
+
+        self.exposure_min = tk.StringVar(value=format_exposure(lo))
+        self.exposure_max = tk.StringVar(value=format_exposure(hi))
+        self.exposure_value = tk.StringVar(
+            value=format_exposure(self._exposure_applied)
+        )
+        self.exposure_position = tk.DoubleVar(
+            value=slider_position(self._exposure_applied, lo, hi)
+        )
+
+        card = ttk.Frame(parent)
+        ttk.Label(
+            card, text="Camera exposure", font=self.theme.font(10, "bold")
+        ).pack(anchor="w")
+
+        line = ttk.Frame(card)
+        line.pack(fill="x", pady=(2, 2))
+        self.exposure_entry = ttk.Entry(
+            line, textvariable=self.exposure_value, width=8
+        )
+        self.exposure_entry.pack(side=tk.LEFT)
+        ttk.Label(line, text="us").pack(side=tk.LEFT, padx=(4, 12))
+        ttk.Label(line, text="min").pack(side=tk.LEFT)
+        self.exposure_min_entry = ttk.Entry(
+            line, textvariable=self.exposure_min, width=7
+        )
+        self.exposure_min_entry.pack(side=tk.LEFT, padx=4)
+        ttk.Label(line, text="max").pack(side=tk.LEFT)
+        self.exposure_max_entry = ttk.Entry(
+            line, textvariable=self.exposure_max, width=7
+        )
+        self.exposure_max_entry.pack(side=tk.LEFT, padx=4)
+
+        self.exposure_scale = ttk.Scale(
+            card, from_=0.0, to=float(SLIDER_STEPS),
+            variable=self.exposure_position, command=self._on_exposure_slider,
+        )
+        self.exposure_scale.pack(fill="x")
+        ttk.Label(
+            card,
+            text="Applied as soon as you let go; the stream keeps running.",
+            font=self.theme.font(8),
+            foreground=self.theme.muted,
+        ).pack(anchor="w")
+        self.exposure_status = ttk.Label(
+            card, text="", font=self.theme.font(8),
+            foreground=self.theme.muted, wraplength=300, justify="left",
+        )
+        self.exposure_status.pack(anchor="w")
+
+        self.exposure_entry.bind("<Return>", self._on_exposure_entry)
+        self.exposure_entry.bind("<KP_Enter>", self._on_exposure_entry)
+        self.exposure_scale.bind("<ButtonRelease-1>", self._on_exposure_release)
+        for entry in (self.exposure_min_entry, self.exposure_max_entry):
+            entry.bind("<Return>", self._on_exposure_bounds)
+            entry.bind("<KP_Enter>", self._on_exposure_bounds)
+            entry.bind("<FocusOut>", self._on_exposure_bounds)
+
+        return card
+
+    def _on_exposure_slider(self, _position):
+        # Only the readout follows the drag; the value is applied on release
+        # (or Return in the box), which avoids flooding the driver at drag rate.
+        lo, hi = self._exposure_bounds
+        self.exposure_value.set(
+            format_exposure(slider_value(self.exposure_position.get(), lo, hi))
+        )
+
+    def _on_exposure_release(self, _event=None):
+        lo, hi = self._exposure_bounds
+        self._request_exposure(slider_value(self.exposure_position.get(), lo, hi))
+
+    def _on_exposure_entry(self, _event=None):
+        try:
+            value = float(self.exposure_value.get())
+        except ValueError:
+            self.exposure_value.set(format_exposure(self._exposure_applied))
+            return "break"
+        lo, hi = self._exposure_bounds
+        self._request_exposure(min(max(value, lo), hi))
+        return "break"
+
+    def _on_exposure_bounds(self, _event=None):
+        try:
+            lo, hi = sanitize_bounds(
+                float(self.exposure_min.get()), float(self.exposure_max.get())
+            )
+        except (TypeError, ValueError):
+            lo, hi = self._exposure_bounds
+        self._exposure_bounds = (lo, hi)
+        self.exposure_min.set(format_exposure(lo))
+        self.exposure_max.set(format_exposure(hi))
+        # Re-anchor the slider in the new range; the camera value itself is
+        # untouched until the user releases a new position.
+        self.exposure_position.set(slider_position(self._exposure_applied, lo, hi))
+        remember_bounds(lo, hi)
+        self.exposure_status.configure(
+            text=f"Slider range {format_exposure(lo)} - {format_exposure(hi)} us."
+        )
+        return "break"
+
+    def _request_exposure(self, value):
+        if self.request_exposure_fn is None:
+            return
+        value = float(value)
+        if abs(value - self._exposure_applied) < 0.5:
+            self.exposure_value.set(format_exposure(self._exposure_applied))
+            return
+        self._exposure_applied = value
+        self.exposure_value.set(format_exposure(value))
+        self.exposure_position.set(slider_position(value, *self._exposure_bounds))
+        self.request_exposure_fn(value)
+        remember_exposure(value)
+        self.exposure_status.configure(
+            text=f"Exposure set to {format_exposure(value)} us."
+        )
+
+    def _sync_exposure_once(self):
+        """Send the remembered value once the camera is demonstrably running."""
+        if self._exposure_synced:
+            return
+        self._exposure_synced = True
+        self.request_exposure_fn(self._exposure_applied)
+        self.exposure_status.configure(
+            text=(
+                f"Exposure {format_exposure(self._exposure_applied)} us "
+                "sent to the camera."
+            )
+        )
+
     @contextmanager
     def _capture_paused(self):
         """
@@ -1455,6 +1636,7 @@ class LiveCalibrationApp:
         if latest_preview is not None:
             self._latest_preview = latest_preview
             self._preview_dirty = True
+            self._sync_exposure_once()
             now = time.monotonic()
             dt = now - self._last_frame_t
             if dt > 0:
@@ -1511,6 +1693,8 @@ def launch_live_gui(
     output_dir: str = ".",
     mirror: bool = False,
     set_mirror_fn=None,
+    exposure_initial: float | None = None,
+    request_exposure_fn=None,
 ) -> None:
     """Launch the live (ROS 2 topic-driven) calibration GUI."""
     _require_gui_deps()
@@ -1527,5 +1711,7 @@ def launch_live_gui(
         output_dir=output_dir,
         mirror=mirror,
         set_mirror_fn=set_mirror_fn,
+        exposure_initial=exposure_initial,
+        request_exposure_fn=request_exposure_fn,
     )
     root.mainloop()

@@ -57,9 +57,11 @@ import cv_bridge
 import numpy as np
 import rclpy
 from rclpy.node import Node
-from rclpy.qos import qos_profile_sensor_data
+from rclpy.qos import QoSProfile, qos_profile_sensor_data
 import sensor_msgs.msg
+import std_msgs.msg
 
+from .exposure import exposure_topic_for, initial_exposure
 from .gui import launch_live_gui
 from ..engine import coverage
 from ..engine.board import LedGridBoard
@@ -170,6 +172,35 @@ class FrameConsumerThread(threading.Thread):
             with self.handle_lock:
                 result = self.calibrator.handle_frame(gray, f"live_frame_{self._seq:05d}")
             self.result_queue.put((result, gray))
+
+
+class ExposurePublisher:
+    """
+    Runtime camera exposure, published where the driver listens.
+
+    The F4F ``libcamera_ros_driver`` subscribes to ``~/expose_us``
+    (``std_msgs/Int32``, microseconds) and applies each value to the running
+    camera -- the same interface the bluefox2 driver uses. Nothing is
+    restarted; publishing before the driver is up is simply dropped, which is
+    why the GUI sends the remembered value once the first frame arrives.
+    """
+
+    def __init__(self, node, image_topic: str, topic: str = ""):
+        self.topic = topic or exposure_topic_for(image_topic)
+        self._pub = None
+        if self.topic:
+            self._pub = node.create_publisher(
+                std_msgs.msg.Int32, self.topic, QoSProfile(depth=1)
+            )
+
+    @property
+    def available(self) -> bool:
+        return self._pub is not None
+
+    def publish(self, microseconds: float) -> None:
+        message = std_msgs.msg.Int32()
+        message.data = max(1, int(round(float(microseconds))))
+        self._pub.publish(message)
 
 
 class CalibrationSubscriberNode(Node):
@@ -449,6 +480,19 @@ def _build_arg_parser() -> argparse.ArgumentParser:
                        "mirrored view. Can be switched at runtime in the GUI. "
                        "Default: on (--no-mirror turns it off)."
                    ))
+    p.add_argument("--exposure", action="store_true",
+                   help=(
+                       "Enable the GUI's exposure slider. The libcamera driver "
+                       "takes runtime exposure on '<camera>/expose_us' "
+                       "(std_msgs/Int32, microseconds), derived from the image "
+                       "topic. Default: hidden."
+                   ))
+    p.add_argument("--exposure_topic", default="",
+                   help=(
+                       "Explicit exposure topic, for a driver whose image "
+                       "topic does not end in '/image_raw'. "
+                       "Default: derived from the image topic."
+                   ))
     add_sample_selection_args(p)
     return p
 
@@ -490,6 +534,20 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         mirror=args.mirror,
     )
 
+    exposure = None
+    if args.exposure:
+        exposure = ExposurePublisher(node, node.resolved_topic, args.exposure_topic)
+        if exposure.available:
+            node.get_logger().info(
+                f"Runtime exposure control on '{exposure.topic}'"
+            )
+        else:
+            node.get_logger().warning(
+                f"No exposure topic for image topic '{node.resolved_topic}'; "
+                "pass --exposure_topic to enable the slider."
+            )
+            exposure = None
+
     spin_thread = SpinThread(node)
     spin_thread.start()
     consumer = FrameConsumerThread(
@@ -509,6 +567,8 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
             output_dir=args.output_dir,
             mirror=args.mirror,
             set_mirror_fn=node.set_mirror,
+            exposure_initial=initial_exposure() if exposure else None,
+            request_exposure_fn=exposure.publish if exposure else None,
         )
     finally:
         consumer.stop()

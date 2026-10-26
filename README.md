@@ -114,6 +114,11 @@ samples.
     calibration** saves the calibration file.
 14. **Status line**: capture state, camera frame rate and sample counts.
 
+With a libcamera camera, a **Camera exposure** card appears below the status (8): a
+logarithmic slider and a value box in microseconds, applied to the running camera when
+you let go of the slider (it needs the patched driver the image builds). The value and
+the slider's min/max are remembered between runs.
+
 ## Checking the result
 
 A good calibration has all of: full coverage before calibrating, a low reprojection
