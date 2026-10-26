@@ -931,9 +931,11 @@ class _BaseCalibrationApp:
             action = "Add more photos."
 
         detail = f"{n} of {min_db_size} photos" if count_short else f"{n} photos"
-        for name, lo, hi, p in progress:
+        for name, _lo, _hi, p in progress:
             if p < 1.0:
-                detail += f" - {name} {100.0 * p:.0f}%"
+                detail += f" - {name}: {100.0 * p:.0f}% coverage"
+            else:
+                detail += f" - {name}: full coverage"
 
         return ("Not ready yet", action, detail)
 
@@ -990,13 +992,7 @@ class _BaseCalibrationApp:
         )
 
     def _draw_bars(self, progress):
-        """
-        Draw the four ROS-style range bars.
-
-        Each bar is a 0..1 track; the colored segment spans the min..max
-        parameter values covered by the accepted samples (mirroring
-        OpenCVCalibrationNode.redraw_monocular's bar drawing).
-        """
+        """Draw the four range bars (Size/Skew fill by progress to target)."""
         c = self.bar_canvas
         c.delete("all")
 
@@ -1012,7 +1008,15 @@ class _BaseCalibrationApp:
             )
             lo_c = max(0.0, min(1.0, lo))
             hi_c = max(0.0, min(1.0, hi))
-            if hi_c > lo_c:
+            # X/Y show the span the samples cover; Size/Skew are scored
+            # against a target maximum, so fill them by progress instead.
+            if str(name).strip().lower() in ("size", "skew"):
+                if p > 0:
+                    c.create_rectangle(
+                        x0, y - 8, x0 + (x1 - x0) * min(p, 1.0), y + 8,
+                        outline="", fill=self._progress_color(p),
+                    )
+            elif hi_c > lo_c:
                 c.create_rectangle(
                     x0 + (x1 - x0) * lo_c,
                     y - 8,

@@ -159,8 +159,9 @@ Two layers, only the first of which gates anything:
 Tkinter app that reuses the engine directly — when changing pipeline behavior, change
 `Calibrator`/`coverage` once and both CLI and GUI pick it up. Load/Analyze runs
 `handle_frame` per photo with a live accept/reject log; the four X/Y/Size/Skew range bars
-mirror ROS's `redraw_monocular` bars (colored segment from min to max accepted value, green
-at full progress). CALIBRATE is driven by `goodenough` (with an explicit confirm-to-override
+mirror ROS's `redraw_monocular` bars. X/Y show the span the accepted samples cover; Size and
+Skew are scored against a target, so they fill by progress instead. Green at full progress.
+CALIBRATE is driven by `goodenough` (with an explicit confirm-to-override
 when not ready); SAVE/EXPORT by `calibrated`.
 
 The **`Forward view (undistorted)`** checkbox (enabled only once calibrated) remaps the live
