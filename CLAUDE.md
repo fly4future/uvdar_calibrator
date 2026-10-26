@@ -110,6 +110,11 @@ The direct analogue of ROS's `MonoCalibrator`. One photo == one "frame":
 - `cal_fromcorners()` assembles `Xt/Yt/Xp_abs/Yp_abs` from the accepted `db` only and runs the
   OCamCalib solve: initial `calibrate()` → `findcenter_fast()` (or slow `findcenter`) →
   optional `recomp_corner_calib` → final `calibrate()` + `reprojectpoints()`.
+- `Calibrator.board` is a property: assigning a new `LedGridBoard` rebuilds `Xt`/`Yt` and
+  marks a solved model stale. `assemble()` raises a clear error when a sample's point count
+  differs from the board's, instead of letting the solver fail later with a numpy broadcast
+  error. Every board swap must go through the instance (`cal.board = ...`), never by
+  rebuilding `Xt`/`Yt` at a call site.
 - `export_txt()` writes `calib_results.txt` (OCamCalib text format, computing `invpol` via
   `findinvpoly`) and returns the path. It takes either an `output_dir` (CLI) or a full
   `path` (the GUI asks the user via `asksaveasfilename`). `.npz`/`.mat` output was removed
@@ -189,9 +194,12 @@ In live mode the LED-grid row is visible and editable: X/Y counts and pitch are 
 to the running `Calibrator` on commit (Enter, focus-out, or a spinbox arrow). A count
 change swaps the board and *drops* the accepted samples, because they index the old
 point grid; a pitch-only change keeps them and just marks the solved model stale. The
-consumer is paused and its queues are drained around a count change so a frame detected
-with the old board cannot land after the clear. `test/test_runtime_board.py` covers both
-paths and the revert on invalid input.
+`Calibrator.board` setter rebuilds `Xt`/`Yt`, so the solver always uses the new grid
+(assigning the board without rebuilding them yields a shape-mismatch broadcast error at
+CALIBRATE). The consumer is paused and its queues are drained around a count change so a
+frame detected with the old board cannot land after the clear.
+`test/test_runtime_board.py` covers both paths, the world-point rebuild, and the revert on
+invalid input.
 
 The on-image **"put the grid here" box** (`gui.guide_box_rect` + `_draw_position_guide_on_image`)
 marks the frame cell the next photo should go into. It is drawn by *both* apps — the live

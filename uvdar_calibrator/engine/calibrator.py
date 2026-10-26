@@ -173,14 +173,34 @@ class Calibrator:
         self.reprojection_stderr: Optional[np.ndarray] = None
         self.reprojection_mse: Optional[float] = None
 
+    @property
+    def board(self) -> LedGridBoard:
+        return self._board
+
+    @board.setter
+    def board(self, board: LedGridBoard) -> None:
+        """
+        Replace the target geometry and rebuild the world point grid.
+
+        ``Xt``/``Yt`` are derived from the board, so they must follow every
+        swap: a live session can change the grid between captures, and a stale
+        world grid makes the solver combine arrays from two different point
+        counts (a numpy broadcast error, not a meaningful calibration
+        failure). Any previously solved model is stale under the new geometry.
+        """
+        self._board = board
+        self._rebuild_world_points()
+        self.calibrated = False
+
+    def _rebuild_world_points(self) -> None:
         # Board/world coordinates in millimeters, x-major/y-minor
         # (MATLAB/OCamCalib indexing; must match detector point order).
         Xt = []
         Yt = []
-        for x in range(board.n_sq_x + 1):
-            for y in range(board.n_sq_y + 1):
-                Xt.append(x * board.spacing_mm)
-                Yt.append(y * board.spacing_mm)
+        for x in range(self._board.n_sq_x + 1):
+            for y in range(self._board.n_sq_y + 1):
+                Xt.append(x * self._board.spacing_mm)
+                Yt.append(y * self._board.spacing_mm)
         self.Xt = np.asarray(Xt, dtype=float).reshape(-1, 1)
         self.Yt = np.asarray(Yt, dtype=float).reshape(-1, 1)
 
@@ -357,6 +377,15 @@ class Calibrator:
         """Assemble solver arrays from the accepted samples only."""
         n = len(self.db)
         n_points = self.board.n_points
+
+        for k, sample in enumerate(self.db, start=1):
+            if len(sample.corners) != n_points:
+                raise RuntimeError(
+                    f"sample {k} has {len(sample.corners)} points but the "
+                    f"board expects {n_points}; the sample set and board "
+                    "geometry disagree -- clear the samples or restore the "
+                    "previous grid"
+                )
 
         Xp_abs = np.full((n_points, 1, n), np.nan, dtype=float)
         Yp_abs = np.full((n_points, 1, n), np.nan, dtype=float)

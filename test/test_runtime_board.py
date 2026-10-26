@@ -101,6 +101,12 @@ def test_count_change_swaps_the_board_and_drops_old_samples():
         assert calibrator.board == LedGridBoard(4, 3, 40.0), calibrator.board
         assert len(calibrator.db) == 0, "samples from the old grid survived"
         assert calibrator.calibrated is False
+        assert calibrator.Xt.shape == (calibrator.board.n_points, 1), (
+            "the world grid still describes the old board"
+        )
+        assert calibrator.Yt.shape == (calibrator.board.n_points, 1)
+        assert calibrator.Xt[-1, 0] == 4 * 40.0
+        assert calibrator.Yt[-1, 0] == 3 * 40.0
         assert consumer.paused_when_idle is False, (
             "capture was not paused before the board swap"
         )
@@ -123,11 +129,46 @@ def test_spacing_change_keeps_samples_but_invalidates_the_model():
         assert calibrator.board == LedGridBoard(6, 4, 60.0), calibrator.board
         assert len(calibrator.db) == 1, "the sample was dropped for a pitch change"
         assert calibrator.calibrated is False, "the old-scale model stayed valid"
+        assert calibrator.Xt[-1, 0] == 6 * 60.0, "the world scale did not follow the pitch"
+        assert calibrator.Yt[-1, 0] == 4 * 60.0
         assert str(app.save_button.cget("state")) == "disabled"
         assert "samples kept" in app.bottom_status.cget("text")
     finally:
         root.destroy()
     print("ok: a pitch change keeps the samples and asks for a re-solve")
+
+
+def test_board_swap_rebuilds_the_world_points_for_the_new_grid():
+    cal = Calibrator(LedGridBoard(6, 4, 50.0), CalibratorConfig())
+    cal.image_size = (960, 600)
+    assert cal.Xt.shape == (35, 1)
+
+    cal.board = LedGridBoard(7, 5, 50.0)
+    assert cal.Xt.shape == (48, 1), "world points still describe the 6x4 grid"
+    assert cal.Yt.shape == (48, 1)
+    assert cal.calibrated is False
+
+    cal.db.clear()
+    _add_sample(cal, cal.board)
+    Xp_abs, Yp_abs, ima_proc = cal.assemble()
+    assert Xp_abs.shape == (48, 1, 1)
+    assert Yp_abs.shape == (48, 1, 1)
+    assert ima_proc == [1]
+    print("ok: swapping the board rebuilds Xt/Yt for the new point grid")
+
+
+def test_assemble_refuses_samples_from_another_grid():
+    cal = Calibrator(LedGridBoard(7, 5, 50.0), CalibratorConfig())
+    cal.image_size = (960, 600)
+    _add_sample(cal, LedGridBoard(6, 4, 50.0))
+
+    try:
+        cal.assemble()
+    except RuntimeError as exc:
+        assert "geometry disagree" in str(exc), exc
+    else:
+        raise AssertionError("assemble accepted a sample from another grid")
+    print("ok: assemble explains a sample/board grid mismatch")
 
 
 def test_invalid_values_revert_to_the_running_board():
@@ -157,5 +198,7 @@ if __name__ == "__main__":
     test_fields_are_visible_and_editable_in_live()
     test_count_change_swaps_the_board_and_drops_old_samples()
     test_spacing_change_keeps_samples_but_invalidates_the_model()
+    test_board_swap_rebuilds_the_world_points_for_the_new_grid()
+    test_assemble_refuses_samples_from_another_grid()
     test_invalid_values_revert_to_the_running_board()
     print("all checks passed")
