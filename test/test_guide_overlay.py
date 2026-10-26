@@ -93,8 +93,8 @@ def test_circle_region_box_follows_the_cells():
     # The box is sized against the usable circle, not the whole sensor.
     scale = coverage.normalized_length_scale(IMAGE_SIZE, valid_region)
     assert scale == 2 * 270.0, scale
-    box = max(60, min(int(round(GUIDE["size"] * scale * 2.2)),
-                       int(0.85 * min(width, height))))
+    box_cap = int(0.85 * min(width, height))
+    box = max(60, min(int(round(GUIDE["size"] * scale * 2.2)), box_cap))
     assert (right - left) <= box and (bottom - top) <= box, (right - left, box)
 
     # And that is where a sample classified into that cell actually sits.
