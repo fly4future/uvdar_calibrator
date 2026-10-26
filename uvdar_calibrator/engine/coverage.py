@@ -149,6 +149,40 @@ def _resolve_valid_region(
     return 0.0, 0.0, float(width), float(height)
 
 
+def normalized_to_pixel(
+    nx: float,
+    ny: float,
+    image_size: Tuple[int, int],
+    valid_region: Optional[Tuple[float, float, float]] = None,
+) -> Tuple[float, float]:
+    """
+    Undo the normalization used by get_parameters and sample_metric.
+
+    Both reduce a view to coordinates relative to the camera's *usable*
+    region -- the full frame, or the fisheye's valid circle when the camera
+    has one. Anything that draws those coordinates back onto the image (the
+    on-image "put the grid here" box) must undo the same mapping, or the
+    box lands on a different spot than the number means.
+    """
+    x0, y0, width, height = _resolve_valid_region(valid_region, image_size)
+    return (x0 + nx * width, y0 + ny * height)
+
+
+def normalized_length_scale(
+    image_size: Tuple[int, int],
+    valid_region: Optional[Tuple[float, float, float]] = None,
+) -> float:
+    """
+    Pixels spanned by one unit of a normalized *length* measure.
+
+    ``p_size`` is a fraction of the usable region's extent, so a length drawn
+    from it has to be scaled by the same region -- the same reasoning as
+    :func:`normalized_to_pixel`, for sizes rather than positions.
+    """
+    _x0, _y0, width, height = _resolve_valid_region(valid_region, image_size)
+    return min(width, height)
+
+
 def get_parameters(
     corners_row_col: np.ndarray,
     board: LedGridBoard,

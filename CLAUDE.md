@@ -154,6 +154,14 @@ Two layers, only the first of which gates anything:
   "next images to capture" report driven off accepted samples. It must never gate the
   CALIBRATE button or the CLI.
 
+Both layers share one coordinate frame: `get_parameters`/`sample_metric` reduce a view to
+coordinates *relative to the camera's usable region* — the full frame, or the fisheye's
+valid circle when `fov_radius_frac` is set. Anything that draws those coordinates back
+onto the image must undo the same mapping (`coverage.normalized_to_pixel` /
+`coverage.normalized_length_scale`, used by `gui.guide_box_rect`); scaling them by the
+raw image size instead puts the "put the grid here" box on the wrong spot — up to 15% of
+the image width off on a lens with an FOV radius fraction.
+
 ### GUI (`apps/gui.py`)
 
 Tkinter app that reuses the engine directly — when changing pipeline behavior, change
@@ -163,6 +171,13 @@ mirror ROS's `redraw_monocular` bars. X/Y show the span the accepted samples cov
 Skew are scored against a target, so they fill by progress instead. Green at full progress.
 CALIBRATE is driven by `goodenough` (with an explicit confirm-to-override
 when not ready); SAVE/EXPORT by `calibrated`.
+
+The on-image **"put the grid here" box** (`gui.guide_box_rect` + `_draw_position_guide_on_image`)
+marks the frame cell the next photo should go into. It is drawn by *both* apps — the live
+preview and the folder app's sample view — from the same guide the sidebar text and the
+coverage graph use, so the three cannot disagree. `test/test_guide_overlay.py` pins the
+geometry down (full-frame placement unchanged; circle-normalized placement lands in the cell
+it names).
 
 The **`Forward view (undistorted)`** checkbox (enabled only once calibrated) remaps the live
 preview through `ocam_model.build_forward_view_maps` — a rectilinear/pinhole rendering of the

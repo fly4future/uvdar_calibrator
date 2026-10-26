@@ -29,6 +29,7 @@ from pathlib import Path
 import queue
 import re
 import time
+from typing import Optional, Tuple
 
 import numpy as np
 
@@ -87,6 +88,43 @@ def _require_gui_deps() -> None:
         raise RuntimeError("Tkinter is required for the GUI. Install python-tk/tkinter.")
     if cv2 is None:
         raise RuntimeError("OpenCV is required. Run: pip install opencv-python")
+
+
+def guide_box_rect(
+    guide: dict,
+    image_size: Tuple[int, int],
+    valid_region: Optional[Tuple[float, float, float]] = None,
+) -> Tuple[int, int, int, int, int, int]:
+    """
+    Pixel geometry of the on-image "put the grid here" box.
+
+    Returns ``(left, top, right, bottom, cx, cy)``: the (clipped) rectangle
+    to stroke and the crosshair centre to draw on it.
+
+    ``guide`` holds normalized coordinates in the same frame of reference as
+    ``coverage.get_parameters`` -- the camera's usable region (the full
+    frame, or the fisheye's valid circle when it has one). Scaling them by
+    the raw image size would put the box on a different spot than the number
+    means, so the mapping is undone here, once, for every caller.
+
+    Kept as a module-level function (no Tk state) so it can be checked
+    without opening a window.
+    """
+    width, height = image_size
+    px, py = coverage.normalized_to_pixel(
+        guide["x"], guide["y"], image_size, valid_region,
+    )
+    cx, cy = int(round(px)), int(round(py))
+
+    scale = coverage.normalized_length_scale(image_size, valid_region)
+    box = int(round(guide["size"] * scale * 2.2))
+    box = max(60, min(box, int(0.85 * min(width, height))))
+
+    left = max(0, cx - box // 2)
+    top = max(0, cy - box // 2)
+    right = min(width - 1, cx + box // 2)
+    bottom = min(height - 1, cy + box // 2)
+    return left, top, right, bottom, cx, cy
 
 
 # ---------------------------------------------------------------------------
@@ -1256,16 +1294,11 @@ class _BaseCalibrationApp:
             return preview
 
         h, w = preview.shape[:2]
-        cx = int(round(guide["x"] * w))
-        cy = int(round(guide["y"] * h))
-
-        box = int(round(guide["size"] * min(w, h) * 2.2))
-        box = max(60, min(box, int(0.85 * min(w, h))))
-
-        x0 = max(0, cx - box // 2)
-        y0 = max(0, cy - box // 2)
-        x1 = min(w - 1, cx + box // 2)
-        y1 = min(h - 1, cy + box // 2)
+        cal = self.calibrator
+        valid_region = cal.valid_region_px() if cal is not None else None
+        x0, y0, x1, y1, cx, cy = guide_box_rect(
+            guide, (w, h), valid_region,
+        )
 
         color = (255, 255, 0)
 
@@ -1338,10 +1371,12 @@ class _BaseCalibrationApp:
         name = Path(sample.image_path).name
         p_str = ", ".join(f"{v:.2f}" for v in sample.params)
         img, pts = self._apply_forward_view(sample.image, sample.corners)
+        n_samples = len(self.calibrator.db)
         self._render_frame(
             img,
             pts,
-            f"Sample {self.current_sample_index + 1}/{len(cal.db)}: {name}   p=[{p_str}]",
+            f"Sample {self.current_sample_index + 1}/{n_samples}: {name}   p=[{p_str}]",
+            show_guidance=True,
         )
 
     def next_sample(self):
