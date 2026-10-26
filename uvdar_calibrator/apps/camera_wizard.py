@@ -330,8 +330,14 @@ def libcamera_image_topic(suffix: str) -> str:
 
 def prepare_libcamera(
     config_root: Path, device: CameraDevice, suffix: str = "front",
+    exposure_us: Optional[float] = None,
 ) -> PreparedCamera:
-    """Write the libcamera driver + calibration + session configs."""
+    """Write the libcamera driver + calibration + session configs.
+
+    ``exposure_us`` is the startup exposure (the driver reads
+    ``control/exposure_time`` once, at launch). Runtime changes on
+    ``~/expose_us`` need a driver built with the exposure topic.
+    """
     config_dir = Path(config_root) / "libcamera"
     custom_cfg = config_dir / "camera_custom_config.yaml"
     calib_cfg = config_dir / "camera_calib.yaml"
@@ -343,6 +349,11 @@ def prepare_libcamera(
 
     topic = libcamera_image_topic(suffix)
     _set_yaml_value(custom_cfg, "camera_name", f'"{device.identifier}"')
+    if exposure_us is not None:
+        exposure_us = int(round(float(exposure_us)))
+        if exposure_us <= 0:
+            raise ValueError("exposure_us must be a positive number")
+        _set_yaml_value(custom_cfg, "exposure_time", str(exposure_us))
     _set_yaml_value(calib_cfg, "camera_name", device.identifier)
     _fill_session(
         session,
@@ -560,6 +571,14 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--exposure_us", type=int, default=None,
+        help=(
+            "libcamera startup exposure in microseconds, written to "
+            "camera_custom_config.yaml. Applies when the driver starts; "
+            "restart the session to change it."
+        ),
+    )
+    parser.add_argument(
         "--list", action="store_true",
         help="Only print the detected cameras and exit.",
     )
@@ -660,9 +679,19 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print("Aborted.", file=sys.stderr)
         return 130
 
+    if args.exposure_us is not None:
+        if kind != "libcamera":
+            print("ERROR: --exposure_us only applies to libcamera.", file=sys.stderr)
+            return 1
+        if args.exposure_us <= 0:
+            print("ERROR: --exposure_us must be positive.", file=sys.stderr)
+            return 1
+
     config_root = repo_root / "config"
     if kind == "libcamera":
-        prepared = prepare_libcamera(config_root, device, suffix=args.suffix)
+        prepared = prepare_libcamera(
+            config_root, device, suffix=args.suffix, exposure_us=args.exposure_us,
+        )
     else:
         prepared = prepare_basler(config_root, device)
 

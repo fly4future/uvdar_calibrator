@@ -249,14 +249,19 @@ configs `config/<camera>/`; don't confuse the two directories.
   pairing. `Calibrator.cal_fromcorners`'s initial guess is correctly `xc=height/2.0,
   yc=width/2.0`, not the other way around; this has been verified by tracing the pairing through
   every solver function that reads it.
-- **Runtime exposure** for libcamera is a topic, not a restart: the F4F
-  `libcamera_ros_driver` applies `~/expose_us` (`std_msgs/Int32`, microseconds) to the
-  running camera (the bluefox2-compatible `exposure_gain_topic_control` build).
-  `--exposure` derives `<camera>/expose_us` from the image topic and enables the live
-  GUI's logarithmic slider; the remembered min/max/value live in
-  `~/.config/uvdar_calibrator/settings.json` (`$UVDAR_CALIBRATOR_SETTINGS` overrides).
-  Only libcamera sessions pass the flag -- Basler uses its own `SetExposure`
-  service and webcams have neither. Do not reintroduce a YAML-rewrite/restart path.
+- **Exposure** has two paths. The Docker images clone the `ros2` release of
+  `ctu-mrs/libcamera_ros_driver` at the commit the MRS base ships and apply
+  `patches/0001-libcamera-expose-us.patch`: a `~/expose_us` (`std_msgs/Int32`,
+  microseconds) subscriber plus `applyParameters()` at every `queueRequest`, because
+  `Request::reuse()` clears per-request controls (a value set once otherwise lasts one
+  frame). `--exposure` derives `<camera>/expose_us` from the image topic and enables
+  the live GUI's logarithmic slider, with min/max/value remembered in
+  `~/.config/uvdar_calibrator/settings.json` (`$UVDAR_CALIBRATOR_SETTINGS`
+  overrides). The **stock apt/MRS driver** has no runtime interface, so the wizard's
+  `--exposure_us` writes `control/exposure_time` when the
+  configs are generated (startup-only; restart to apply). Only libcamera sessions
+  pass either flag -- Basler uses its own `SetExposure` service and webcams
+  have neither. Do not reintroduce a *runtime* YAML-rewrite/driver-restart loop.
 - **Mirroring the live input** (on by default: `--mirror`/`--no-mirror`, or the GUI's "Mirror image" switch)
   flips the frame in `live_node.mkgray`, *before* it reaches either queue, so the preview, the
   detection, the coverage advice and the saved model all describe the same (mirrored) view.

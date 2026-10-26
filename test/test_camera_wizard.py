@@ -224,6 +224,35 @@ def test_generated_configs_match_the_templates():
     print("ok: configs are regenerated from the templates and fully filled")
 
 
+def test_exposure_us_is_written_to_the_libcamera_config():
+    """The stock driver reads exposure only at startup; the wizard can set it."""
+    with tempfile.TemporaryDirectory() as tmp:
+        repo = Path(tmp)
+        shutil.copytree(_REPO_ROOT / "config", repo / "config")
+        lib = cw.CameraDevice("libcamera", "/soc/cam@36", "cam")
+
+        prepared = cw.prepare_libcamera(repo / "config", lib, exposure_us=8000)
+        text = prepared.driver_config.read_text(encoding="utf-8")
+        assert re.search(
+            r"^\s*exposure_time: 8000(?:\s+#.*)?$", text, re.MULTILINE
+        ), text
+
+        prepared = cw.prepare_libcamera(repo / "config", lib)
+        text = prepared.driver_config.read_text(encoding="utf-8")
+        assert re.search(
+            r"^\s*exposure_time: 500(?:\s+#.*)?$", text, re.MULTILINE
+        ), text
+
+        for bad in (0, -1):
+            try:
+                cw.prepare_libcamera(repo / "config", lib, exposure_us=bad)
+            except ValueError:
+                pass
+            else:
+                raise AssertionError(f"exposure_us={bad} must be rejected")
+    print("ok: --exposure_us sets the startup exposure in the libcamera config")
+
+
 def test_main_hands_off_and_refuses_ambiguity():
     """--yes must never prompt: one camera configures, two abort with advice."""
     two = {"basler": cw.Detection("basler", [
@@ -294,6 +323,7 @@ if __name__ == "__main__":
     test_basler_listing_never_raises()
     test_selection_prefers_unambiguous_answers()
     test_generated_configs_match_the_templates()
+    test_exposure_us_is_written_to_the_libcamera_config()
     test_main_hands_off_and_refuses_ambiguity()
     test_list_is_a_pure_query()
     test_docker_images_start_the_wizard()

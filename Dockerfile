@@ -42,6 +42,8 @@ RUN mkdir -p /tmp/basler-camera-drivers && \
     tmuxinator \
     python3-pip \
     python3-pytest \
+    libcamera-dev \
+    ros-${ROS_DISTRO}-ament-cmake-ros \
     ros-${ROS_DISTRO}-libcamera-ros-driver \
     /tmp/basler-camera-drivers/*.deb \
     && rm -rf /tmp/basler-camera-drivers /var/lib/apt/lists/*
@@ -60,8 +62,18 @@ RUN . /opt/ros/${ROS_DISTRO}/setup.sh && \
     rosdep install --from-paths /deps_ws/src --ignore-src -r -y && \
     rm -rf /var/lib/apt/lists/*
 
+# Clone the libcamera driver at the release the MRS image ships and patch in runtime
+# exposure (~/expose_us): the stock package only reads control/exposure_time at
+# startup. Cloned after rosdep on purpose -- its mrs_lib dependency comes from the
+# installed apt packages (kept as the underlay), not from a rosdep key.
+COPY patches/0001-libcamera-expose-us.patch /tmp/libcamera-expose-us.patch
+RUN git clone https://github.com/ctu-mrs/libcamera_ros_driver.git /deps_ws/src/libcamera_ros_driver && \
+    git -C /deps_ws/src/libcamera_ros_driver checkout 7561354be28813632538d184c8e7d1ed99a1ea8e && \
+    git -C /deps_ws/src/libcamera_ros_driver apply /tmp/libcamera-expose-us.patch && \
+    rm /tmp/libcamera-expose-us.patch
+
 WORKDIR /deps_ws
-RUN . /opt/ros/${ROS_DISTRO}/setup.sh && colcon build
+RUN . /opt/ros/${ROS_DISTRO}/setup.sh && colcon build --cmake-args -DBUILD_TESTING=OFF
 
 # Only package.xml is needed to resolve the calibrator's dependencies
 COPY package.xml /tmp/uvdar_calibrator/package.xml

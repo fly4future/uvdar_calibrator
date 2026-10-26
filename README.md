@@ -202,6 +202,10 @@ What the `docker run` flags in the [quick start](#quick-start) are for:
 - `-e HOST_UID=... -e HOST_GID=...`: the user that owns the exported files instead of
   root.
 
+The image rebuilds the libcamera driver with a small patch
+(`patches/0001-libcamera-expose-us.patch`) that adds the `~/expose_us` topic, so the
+exposure slider works without restarting the stream.
+
 The wizard detects:
 
 - **libcamera** sensors from the device tree: a sensor is a node that is both an I2C

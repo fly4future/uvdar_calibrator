@@ -1,0 +1,113 @@
+--- a/src/libcamera_ros_driver.cpp
++++ b/src/libcamera_ros_driver.cpp
+@@ -8,6 +8,7 @@
+ #include <cstdint>
+ #include <condition_variable>
+ #include <cstring>
++#include <functional>
+ #include <iostream>
+ #include <memory>
+ #include <mutex>
+@@ -40,6 +41,7 @@
+ #include <image_transport/image_transport.hpp>
+ 
+ #include <std_msgs/msg/header.hpp>
++#include <std_msgs/msg/int32.hpp>
+ #include <sensor_msgs/msg/camera_info.hpp>
+ 
+ #include <mrs_lib/param_loader.h>
+@@ -166,6 +168,13 @@
+     std::unordered_map<std::string, const libcamera::ControlId*> parameter_ids_;
+     // parameters that are to be set for every request
+     std::unordered_map<unsigned int, libcamera::ControlValue> parameters_;
++    // queued exposure from ~/expose_us (microseconds)
++    rclcpp::Subscription<std_msgs::msg::Int32>::SharedPtr exposure_time_sub_;
++    void callbackExposureTime(const std_msgs::msg::Int32::SharedPtr msg);
++    // parameters_ must be applied to every request: Request::reuse() clears
++    // per-request controls, so a value set once is otherwise lost after frame 1.
++    // The caller must hold request_lock_.
++    void applyParameters(libcamera::Request* request);
+ 
+     void declareControlParameters();
+     void requestComplete(libcamera::Request* request);
+@@ -582,8 +591,7 @@
+       }
+ 
+       // set modified control parameters
+-      for (const auto& [id, value] : parameters_)
+-        request->controls().set(id, value);
++      applyParameters(request.get());
+ 
+       requests_.push_back(std::move(request));
+     }
+@@ -611,6 +619,10 @@
+ 
+     image_pub_ = it.advertiseCamera("~/image_raw", 1);
+ 
++    // expose_us: runtime exposure control (bluefox2-compatible topic)
++    exposure_time_sub_ = node_->create_subscription<std_msgs::msg::Int32>(
++        "~/expose_us", 1, std::bind(&LibcameraRosDriver::callbackExposureTime, this, std::placeholders::_1));
++
+     //}
+ 
+     // register callback
+@@ -777,6 +789,35 @@
+   }
+ 
+ 
++  /* applyParameters() //{ */
++
++  void LibcameraRosDriver::applyParameters(libcamera::Request* request)
++  {
++    for (const auto& [id, value] : parameters_)
++      request->controls().set(id, value);
++  }
++
++  //}
++
++  /* callbackExposureTime() //{ */
++
++  void LibcameraRosDriver::callbackExposureTime(const std_msgs::msg::Int32::SharedPtr msg)
++  {
++    if (!parameter_ids_.count("ExposureTime"))
++    {
++      RCLCPP_WARN(node_->get_logger(), "ExposureTime control not available on this camera");
++      return;
++    }
++
++    std::scoped_lock lock(request_lock_);
++    if (!updateControlParameter(pv_to_cv(msg->data, parameter_ids_["ExposureTime"]->type()), parameter_ids_["ExposureTime"]))
++      RCLCPP_ERROR_STREAM(node_->get_logger(), "Failed to set ExposureTime to " << msg->data);
++    else
++      RCLCPP_INFO_STREAM(node_->get_logger(), "ExposureTime set to " << msg->data << " us");
++  }
++
++  //}
++
+   /* requestComplete() //{ */
+ 
+   void LibcameraRosDriver::requestComplete(libcamera::Request* request)
+@@ -854,6 +895,7 @@
+     if (dropped)
+     {
+       dropped->reuse(libcamera::Request::ReuseBuffers);
++      applyParameters(dropped);
+       if (camera_->queueRequest(dropped) < 0)
+         RCLCPP_ERROR_STREAM_THROTTLE(node_->get_logger(), *node_->get_clock(), 1000, "queueRequest (dropped frame) failed");
+     }
+@@ -862,6 +904,7 @@
+     if (!handed_off)
+     {
+       request->reuse(libcamera::Request::ReuseBuffers);
++      applyParameters(request);
+       if (camera_->queueRequest(request) < 0)
+         RCLCPP_ERROR_STREAM_THROTTLE(node_->get_logger(), *node_->get_clock(), 1000,
+                                      "queueRequest failed -- camera is no longer accepting buffers (stalled/stopped)");
+@@ -907,6 +950,7 @@
+       {
+         std::scoped_lock lock(request_lock_);
+         f.request->reuse(libcamera::Request::ReuseBuffers);
++        applyParameters(f.request);
+         if (camera_->queueRequest(f.request) < 0)
+           RCLCPP_ERROR_STREAM_THROTTLE(node_->get_logger(), *node_->get_clock(), 1000, "queueRequest (worker) failed");
+       }
