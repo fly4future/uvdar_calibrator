@@ -333,8 +333,7 @@ def compute_goodenough_with_bins(
     Readiness is decided solely by compute_goodenough (sample count AND
     per-axis range progress). The bin report is returned alongside it as a
     *hint* -- it drives the "next images to capture" guidance and the
-    coverage-graph marker, and must never gate the CALIBRATE button or the
-    CLI.
+    coverage-graph marker, and must never gate the CALIBRATE button.
     """
     range_good, progress = compute_goodenough(
         db_params,

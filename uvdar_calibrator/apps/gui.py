@@ -1,9 +1,8 @@
 """
-Tkinter calibration GUIs (batch and live).
+Tkinter live calibration GUI.
 
-Both apps feed frames into
-:class:`~uvdar_calibrator.engine.calibrator.Calibrator` and share one panel
-implementation (``_BaseCalibrationApp``):
+Feeds frames from the ROS 2 subscriber in :mod:`uvdar_calibrator.apps.live_node`
+into :class:`~uvdar_calibrator.engine.calibrator.Calibrator` and shows:
 
 - a live log of per-frame accept/reject decisions,
 - four ROS-style range progress bars (X, Y, Size, Skew), each drawn as a
@@ -13,19 +12,12 @@ implementation (``_BaseCalibrationApp``):
   the accepted samples,
 - CALIBRATE gated by ``calibrator.goodenough`` (with confirm-to-override)
   and SAVE/EXPORT gated by ``calibrator.calibrated``.
-
-``BatchCalibrationApp`` drives the panel from a folder of photos
-("frames arrive one at a time" simulated over files);
-``LiveCalibrationApp`` drives it from a queue of results produced by the
-ROS 2 subscriber in :mod:`uvdar_calibrator.apps.live_node`. Only the frame
-*source* differs between the two -- keep panel/progress logic in the base
-class so the apps never diverge.
 """
 
 from __future__ import annotations
 
 from contextlib import nullcontext
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 import math
 import queue
@@ -39,13 +31,6 @@ from ..engine import coverage
 from ..engine import ocam_model
 from ..engine.board import LedGridBoard
 from ..engine.calibrator import Calibrator, CalibratorConfig
-from ..engine.detection import (
-    PREVIEW_DIR_NAME,
-    find_image_files,
-    is_preview_dir,
-    preview_dir_explanation,
-    read_image_gray,
-)
 
 try:
     import cv2
@@ -78,11 +63,6 @@ def camera_id_from_config(identifier: str) -> str:
 
     """
     return _sanitize_filename_part((identifier or "").strip())
-
-
-def camera_id_from_image_dir(image_dir: str) -> str:
-    """Derive a filename-safe camera identifier from a photo folder path."""
-    return _sanitize_filename_part(Path(image_dir or "").name)
 
 
 def _require_gui_deps() -> None:
@@ -200,42 +180,57 @@ def apply_theme(root) -> Theme:
     return theme
 
 
-class _BaseCalibrationApp:
+class LiveCalibrationApp:
     """
-    Shared calibration panel.
+    Live-topic calibration app driven by the ROS 2 subscriber in ``live_node``.
 
-    Holds everything that only depends on ``Calibrator`` state, not on how
-    frames arrive: widget layout, range bars, sample log, suggestion box,
-    sample browsing, and the CALIBRATE / SAVE-EXPORT / report actions.
-    Subclasses implement ``_build_source_controls`` (the top row deciding
-    where frames come from) and feed results through ``_append_log`` /
-    ``_update_progress_panel`` / ``_render_frame``.
+    The top row holds an image-topic field and a Start/Stop capture toggle.
+    Two queues are drained independently: ``preview_queue`` (unthrottled --
+    always the freshest camera frame, for a responsive live view) and
+    ``result_queue`` (throttled by ``--rate_hz`` -- processed
+    ``FrameResult``s, for the sample log/accept-reject/progress panel), so
+    the camera view stays live regardless of detection cost.
+    Previous/Next browse the accepted samples.
     """
 
-    # True only in BatchCalibrationApp. Its Base/Ext file filters moved out of
-    # the main window into the Advanced Settings dialog, and a live topic has
-    # no folder to filter, so the base app contributes no file-filter rows.
-    #TODO do we want them in advance settings? how often are they really used
-    _has_file_filters = False
-
-    # True only in LiveCalibrationApp: the mirror switch acts on the incoming
-    # frame stream, which only the live app has.
-    _mirror_supported = False
-    # True only in LiveCalibrationApp: the running Calibrator is the only one
-    # whose board can be swapped without re-running the whole folder analysis.
-    _runtime_board_supported = False
+    POLL_MS = 50
 
     def __init__(
         self,
         root,
-        board: LedGridBoard | None = None,
-        config: CalibratorConfig | None = None,
+        calibrator: Calibrator,
+        result_queue,
+        preview_queue,
+        consumer,
+        subscribe_fn,
+        initial_topic: str = "image",
+        camera_id: str = "",
+        mirror: bool = False,
+        set_mirror_fn=None,
         output_dir: str = ".",
         slow_find_center: bool = False,
         dev_mode: bool = False,
     ):
-        board = board or LedGridBoard()
-        config = config or CalibratorConfig()
+        board = calibrator.board
+        config = CalibratorConfig.from_calibrator(calibrator)
+
+        self.result_queue = result_queue
+        self.preview_queue = preview_queue
+        self.consumer = consumer
+        self.subscribe_fn = subscribe_fn
+        self.topic = tk.StringVar(value=initial_topic)
+        self._subscribed_topic = initial_topic
+        # Identifier from the driver config (wizard's --camera_id); used for
+        # the suggested SAVE filename.
+        self.camera_id = camera_id or ""
+        self.n_rejected = 0
+        self.n_failed = 0
+        self._latest_preview = None
+        self._latest_corners = None
+        self._latest_outcome = "waiting for first processed frame"
+        self._last_frame_t = time.monotonic()
+        self._fps = 0.0
+        self._stale_warned = False
 
         self.root = root
         self.root.title("UV-DAR / OCamCalib Calibration Assistant")
@@ -259,27 +254,16 @@ class _BaseCalibrationApp:
         self.taylor_order = tk.IntVar(value=config.taylor_order)
         self.output_dir = tk.StringVar(value=output_dir)
         self.slow_find_center = tk.BooleanVar(value=slow_find_center)
-        # Advanced/launch-time-only settings (fov_radius_frac, sample
-        # selection tuning, ...), editable via the "Advanced Settings..."
-        # dialog (_open_advanced_settings) rather than always-visible
-        # widgets, since most sessions won't need them -- merged with the
-        # live board/taylor_order widget values when a Calibrator is
-        # actually constructed. See coverage.get_parameters for why
-        # fov_radius_frac matters.
+        # Launch-time settings of the already-built Calibrator, shown
+        # read-only in the "Advanced Settings..." dialog.
         self.calib_config = config
-        # LiveCalibrationApp sets this True: its Calibrator is already
-        # built by live_node.py's main() and never rebuilt, so the dialog
-        # there can only display the real launch-time settings, not edit
-        # them (same reasoning as board_option_widgets being disabled).
-        self._advanced_settings_read_only = False
         self.show_plots = tk.BooleanVar(value=False)
         self.forward_view_var = tk.BooleanVar(value=False)
-        # Live mode only: flip the incoming frames left-right. Seeded from
-        # --mirror and switchable at runtime in the Advanced Settings
-        # dialog. set_mirror_fn is None in the batch app, which has no
-        # incoming stream to flip.
-        self.mirror = tk.BooleanVar(value=False)
-        self.set_mirror_fn = None
+        # Flip the incoming frames left-right. Seeded from --mirror and
+        # switchable at runtime in the Advanced Settings dialog; the live node
+        # owns the actual flip.
+        self.mirror = tk.BooleanVar(value=bool(mirror))
+        self.set_mirror_fn = set_mirror_fn
         # Rectilinear FOV. Wider shows more of the frame but adds black corners:
         # a rectilinear projection breaks down past ~90 deg off-axis.
         self.forward_view_hfov = tk.DoubleVar(
@@ -291,10 +275,10 @@ class _BaseCalibrationApp:
         self.dev_mode = bool(dev_mode)
         # (parent, [(widget, pack_kwargs, dev_only), ...]) in display order.
         # Toggling re-packs each row from scratch in this order, because pack()
-        # appends to a parent's stacking order 
+        # appends to a parent's stacking order.
         self._layout_rows = []
 
-        self.calibrator: Calibrator | None = None
+        self.calibrator = calibrator
         self.current_sample_index = 0
         # The position guide is drawn on every rendered preview frame but only
         # depends on the accepted-sample db, so recompute it when the db
@@ -314,6 +298,11 @@ class _BaseCalibrationApp:
         self.root.bind("<Right>", lambda _e: self.next_sample())
         self.root.bind("<Control-d>", lambda _e: self._toggle_dev_mode())
         self.root.bind("<Control-D>", lambda _e: self._toggle_dev_mode())
+
+        self._refresh_capture_button()
+        self._set_status(f"Live capture running on topic '{initial_topic}'.")
+        self._update_board_button()
+        self.root.after(self.POLL_MS, self._poll_queue)
 
     # ------------------------------------------------------------------
     # Dev mode
@@ -358,14 +347,6 @@ class _BaseCalibrationApp:
     # Widgets
     # ------------------------------------------------------------------
 
-    def _build_source_controls(self, parent) -> None:
-        """Build the top row deciding where frames come from (subclass hook)."""
-        raise NotImplementedError
-
-    def _on_board_fields_committed(self, _event=None):
-        """Live app only: apply an edited LED-grid geometry to the running rig."""
-        return "break"
-
     def _build_widgets(self):
         top = ttk.Frame(self.root, padding=8)
         top.pack(side=tk.TOP, fill=tk.X)
@@ -377,17 +358,9 @@ class _BaseCalibrationApp:
         # the default board, and the two checkboxes that used to sit here
         # (MATLAB-style slow Find Center, show plots) were pure expert knobs --
         # all of them now live in the Advanced Settings dialog.
-        # Dev-only in the batch app: the whole settings row (board disclosure
-        # + Advanced Settings). The default 6x4 / 50 mm board is right for the
-        # rig, and everything else in here is something you open once,
-        # deliberately. Live mode shows it, because the board can be swapped
-        # while the stream is running.
+        # Always shown: the board can be swapped while the stream is running.
         opts = ttk.Frame(self.root, padding=(8, 0, 8, 8))
-        self._register_row(
-            self.root,
-            [(opts, {"side": tk.TOP, "fill": tk.X},
-              not self._runtime_board_supported)],
-        )
+        opts.pack(side=tk.TOP, fill=tk.X)
         self.board_option_widgets = []
 
         self._board_panel_visible = False
@@ -413,11 +386,10 @@ class _BaseCalibrationApp:
         w.pack(side=tk.LEFT, padx=4)
         self.board_option_widgets.append(w)
 
-        if self._runtime_board_supported:
-            ttk.Label(
-                self.board_panel, text="applies immediately",
-                font=self.theme.font(8), foreground=self.theme.muted,
-            ).pack(side=tk.LEFT, padx=(12, 0))
+        ttk.Label(
+            self.board_panel, text="applies immediately",
+            font=self.theme.font(8), foreground=self.theme.muted,
+        ).pack(side=tk.LEFT, padx=(12, 0))
 
         # The button doubles as the readout of the current geometry, so a
         # collapsed panel still tells the user what the app is assuming.
@@ -425,16 +397,14 @@ class _BaseCalibrationApp:
             var.trace_add("write", lambda *_a: self._update_board_button())
         self._update_board_button()
 
-        if self._runtime_board_supported:
-            # Commit on Enter, focus-out or a spinbox arrow -- not on every
-            # keystroke of a half-typed number. The batch app keeps these as
-            # launch-time inputs, re-read by Load / Analyze.
-            for widget in self.board_option_widgets:
-                widget.bind("<Return>", self._on_board_fields_committed)
-                widget.bind("<KP_Enter>", self._on_board_fields_committed)
-                widget.bind("<FocusOut>", self._on_board_fields_committed)
-                if isinstance(widget, ttk.Spinbox):
-                    widget.configure(command=self._on_board_fields_committed)
+        # Commit on Enter, focus-out or a spinbox arrow -- not on every
+        # keystroke of a half-typed number.
+        for widget in self.board_option_widgets:
+            widget.bind("<Return>", self._on_board_fields_committed)
+            widget.bind("<KP_Enter>", self._on_board_fields_committed)
+            widget.bind("<FocusOut>", self._on_board_fields_committed)
+            if isinstance(widget, ttk.Spinbox):
+                widget.configure(command=self._on_board_fields_committed)
 
         main = ttk.Frame(self.root, padding=8)
         main.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
@@ -535,15 +505,12 @@ class _BaseCalibrationApp:
         # Three lines instead of one "Status: NOT READY -- need more varied
         # views (8 accepted samples)" label"
         self.readiness_verdict = ttk.Label(
-            sidebar, text="No photos loaded yet", font=self.theme.font(13, "bold"),
+            sidebar, text="Waiting for frames", font=self.theme.font(13, "bold"),
             wraplength=340, justify="center",
         )
         self.readiness_action = ttk.Label(
             sidebar,
-            text=(
-                "Offline mode: press Load / Analyze to read a folder of photos. "
-                "To calibrate live from a camera, use the cameracalibrator node."
-            ),
+            text="Press Start Capture to begin collecting photos from the topic.",
             font=self.theme.font(10), wraplength=340, justify="center",
         )
         self.readiness_detail = ttk.Label(
@@ -701,16 +668,16 @@ class _BaseCalibrationApp:
 
     def _open_advanced_settings(self):
         """
-        Modal dialog for the settings that are not on the main window:
-        taylor_order, fov_radius_frac, sample_threshold, param_ranges
-        (X/Y/Size/Skew), min_db_size, max_accepted_samples,
-        save_previews_for_rejected, slow_find_center, show_plots, plus the
-        batch app's base_name/extension file filters. Editable in batch mode;
-        read-only in live mode, where the running Calibrator can't be
-        reconfigured mid-capture (see self._advanced_settings_read_only).
+        Dialog for the settings that are not on the main window.
+
+        The Calibrator's launch-time configuration (taylor_order,
+        fov_radius_frac, sample_threshold, param_ranges, min_db_size,
+        max_accepted_samples, save_previews_for_rejected) is shown read-only:
+        the running Calibrator can't be reconfigured mid-capture. The switches
+        that act outside it -- mirroring, slow Find Center, plots -- stay
+        editable.
         """
         cfg = self.calib_config
-        read_only = self._advanced_settings_read_only
 
         dialog = tk.Toplevel(self.root)
         dialog.title("Advanced Settings")
@@ -720,254 +687,89 @@ class _BaseCalibrationApp:
         body = ttk.Frame(dialog, padding=12)
         body.pack(fill=tk.BOTH, expand=True)
 
-        interactive_widgets = []
-        # Tcl variables are deleted when the last Python reference to their
-        # StringVar goes away, and an Entry only stores the variable *name*, so
-        # a collected StringVar leaves the field rendering empty. In editable
-        # mode the _save closure happens to keep them alive; in read-only (live)
-        # mode nothing does, hence this explicit list.
-        dialog_vars = []
-
         def _fmt(value):
             return "" if value is None else str(value)
 
-        def _labeled_entry(row, label, value, hint):
+        def _value_row(row, label, value, hint):
             ttk.Label(body, text=label).grid(row=row, column=0, sticky="w", pady=3)
-            var = tk.StringVar(value=_fmt(value))
-            entry = ttk.Entry(body, textvariable=var, width=10)
-            entry.grid(row=row, column=1, sticky="w", padx=6)
-            interactive_widgets.append(entry)
-            dialog_vars.append(var)
+            ttk.Label(body, text=_fmt(value)).grid(row=row, column=1, sticky="w", padx=6)
             ttk.Label(
                 body, text=hint, font=self.theme.font(8), foreground=self.theme.muted,
             ).grid(row=row, column=2, sticky="w")
-            return var
 
-        row = 0
-
-        # Which files to load. since they are batch only (base and ext)
-        file_filter_vars = None
-        if self._has_file_filters:
+        def _section(row, title):
             ttk.Label(
-                body, text="Which files to load", font=self.theme.font(9, "bold")
+                body, text=title, font=self.theme.font(9, "bold"),
             ).grid(row=row, column=0, columnspan=3, sticky="w", pady=(0, 4))
-            row += 1
-            base_var = _labeled_entry(
-                row, "Filename base:", self.base_name.get(),
-                "load only files whose name starts with this; blank = all",
-            )
-            row += 1
-            ext_var = _labeled_entry(
-                row, "File extension:", self.extension.get(),
-                "load only this extension; blank or 'all' = every supported one",
-            )
-            row += 1
-            file_filter_vars = (base_var, ext_var)
 
+        def _separator(row):
             ttk.Separator(body, orient=tk.HORIZONTAL).grid(
                 row=row, column=0, columnspan=3, sticky="ew", pady=8
             )
+
+        _section(0, "Calibration model and sample selection (set at launch)")
+        rows = [
+            ("Taylor order:", self.taylor_order.get(),
+             "polynomial degree of the omnidirectional model; 4 is the OCamCalib default"),
+            ("FOV radius fraction:", cfg.fov_radius_frac,
+             "fisheye usable-circle radius, fraction of min(w,h)/2; blank = full frame"),
+            ("Sample threshold:", cfg.sample_threshold,
+             "min distance for a new sample to be accepted, in target spans"),
+            ("Param ranges:",
+             "  ".join(f"{n}: {v}" for n, v in zip(coverage.PARAM_NAMES, cfg.param_ranges)),
+             "per-axis span the samples must cover"),
+            ("Min DB size:", cfg.min_db_size,
+             "accepted-sample count required for readiness"),
+            ("Max accepted samples:", cfg.max_accepted_samples,
+             "hard cap on retained samples; blank = unbounded"),
+            ("Previews for rejected:", "yes" if cfg.save_previews_for_rejected else "no",
+             "also save previews of rejected frames"),
+        ]
+        row = 1
+        for label, value, hint in rows:
+            _value_row(row, label, value, hint)
             row += 1
 
-        ttk.Label(
-            body, text="Calibration model and sample selection",
-            font=self.theme.font(9, "bold"),
-        ).grid(row=row, column=0, columnspan=3, sticky="w", pady=(0, 4))
+        _separator(row)
         row += 1
-
-        taylor_var = _labeled_entry(
-            row, "Taylor order:", self.taylor_order.get(),
-            "polynomial degree of the omnidirectional model; 4 is the OCamCalib default",
-        )
+        _section(row, "Solve")
         row += 1
-
-        fov_var = _labeled_entry(
-            row, "FOV radius fraction:", cfg.fov_radius_frac,
-            "fisheye usable-circle radius, fraction of min(w,h)/2; blank = full frame",
-        )
-        row += 1
-
-        threshold_var = _labeled_entry(
-            row, "Sample threshold:", cfg.sample_threshold,
-            "min distance for a new sample to be accepted, in target spans "
-            "(each axis normalized by its Param range)",
-        )
-        row += 1
-
-        ttk.Label(body, text="Param ranges:").grid(row=row, column=0, sticky="w", pady=3)
-        ranges_frame = ttk.Frame(body)
-        ranges_frame.grid(row=row, column=1, columnspan=2, sticky="w")
-        range_vars = []
-        for name, value in zip(coverage.PARAM_NAMES, cfg.param_ranges):
-            ttk.Label(ranges_frame, text=f"{name}:").pack(side=tk.LEFT)
-            v = tk.StringVar(value=_fmt(value))
-            entry = ttk.Entry(ranges_frame, textvariable=v, width=6)
-            entry.pack(side=tk.LEFT, padx=(2, 8))
-            interactive_widgets.append(entry)
-            range_vars.append(v)
-            dialog_vars.append(v)
-        row += 1
-
-        min_db_var = _labeled_entry(
-            row, "Min DB size:", cfg.min_db_size,
-            "accepted-sample count required for readiness, ANDed with full range coverage",
-        )
-        row += 1
-
-        max_samples_var = _labeled_entry(
-            row, "Max accepted samples:", cfg.max_accepted_samples,
-            "hard cap on retained samples; blank = unbounded",
-        )
-        row += 1
-
-        save_previews_var = tk.BooleanVar(value=cfg.save_previews_for_rejected)
-        save_previews_check = ttk.Checkbutton(
-            body, text="Save previews for rejected frames too", variable=save_previews_var,
-        )
-        save_previews_check.grid(row=row, column=0, columnspan=3, sticky="w", pady=(6, 0))
-        interactive_widgets.append(save_previews_check)
-        row += 1
-
-        # These two used to be checkbuttons on the main window, where they sat
-        # next to the capture controls looking like everyday options. They only
-        # matter when a solve misbehaves, so they live here now.
-        slow_center_var = tk.BooleanVar(value=self.slow_find_center.get())
-        slow_center_check = ttk.Checkbutton(
+        ttk.Checkbutton(
             body, text="MATLAB-style slow Find Center (slower, more accurate)",
-            variable=slow_center_var,
-        )
-        slow_center_check.grid(row=row, column=0, columnspan=3, sticky="w")
-        interactive_widgets.append(slow_center_check)
+            variable=self.slow_find_center,
+        ).grid(row=row, column=0, columnspan=3, sticky="w")
+        row += 1
+        ttk.Checkbutton(
+            body, text="Show diagnostics plots after calibration",
+            variable=self.show_plots,
+        ).grid(row=row, column=0, columnspan=3, sticky="w")
         row += 1
 
-        show_plots_var = tk.BooleanVar(value=self.show_plots.get())
-        show_plots_check = ttk.Checkbutton(
-            body, text="Show diagnostics plots after calibration", variable=show_plots_var,
-        )
-        show_plots_check.grid(row=row, column=0, columnspan=3, sticky="w")
-        interactive_widgets.append(show_plots_check)
+        _separator(row)
+        row += 1
+        _section(row, "Incoming frames")
+        row += 1
+        ttk.Checkbutton(
+            body,
+            text="Mirror incoming frames (flip left-right)",
+            variable=self.mirror,
+            command=self._on_mirror_toggled,
+        ).grid(row=row, column=0, columnspan=3, sticky="w")
+        row += 1
+        ttk.Label(
+            body,
+            text=(
+                "for cameras whose driver delivers a mirrored image; the "
+                "preview, the detection and the saved model all use the "
+                "mirrored view"
+            ),
+            font=self.theme.font(8), foreground=self.theme.muted, wraplength=360,
+        ).grid(row=row, column=0, columnspan=3, sticky="w")
         row += 1
 
-        dialog_vars += [save_previews_var, slow_center_var, show_plots_var]
-        self._dialog_vars = dialog_vars
-
-        if self._mirror_supported:
-            # The mirror acts on the incoming frame stream, not on the
-            # running Calibrator, so it stays editable even in the
-            # read-only (live) dialog -- deliberately not in
-            # interactive_widgets.
-            ttk.Separator(body, orient=tk.HORIZONTAL).grid(
-                row=row, column=0, columnspan=3, sticky="ew", pady=8
-            )
-            row += 1
-            ttk.Label(
-                body, text="Incoming frames", font=self.theme.font(9, "bold"),
-            ).grid(row=row, column=0, columnspan=3, sticky="w", pady=(0, 4))
-            row += 1
-            ttk.Checkbutton(
-                body,
-                text="Mirror incoming frames (flip left-right)",
-                variable=self.mirror,
-                command=self._on_mirror_toggled,
-            ).grid(row=row, column=0, columnspan=3, sticky="w")
-            row += 1
-            ttk.Label(
-                body,
-                text=(
-                    "for cameras whose driver delivers a mirrored image; the "
-                    "preview, the detection and the saved model all use the "
-                    "mirrored view"
-                ),
-                font=self.theme.font(8), foreground=self.theme.muted, wraplength=360,
-            ).grid(row=row, column=0, columnspan=3, sticky="w")
-            row += 1
-
-        if read_only:
-            for widget in interactive_widgets:
-                widget.configure(state="disabled")
-            ttk.Label(
-                body,
-                text=(
-                    "Read-only: this live session's Calibrator is already running "
-                    "and can't be reconfigured mid-capture. The mirror switch "
-                    "above still applies to incoming frames."
-                ),
-                font=self.theme.font(8, "italic"), foreground=self.theme.bad, wraplength=360,
-            ).grid(row=row, column=0, columnspan=3, sticky="w", pady=(10, 0))
-            row += 1
-
-        actions = ttk.Frame(body)
-        actions.grid(row=row, column=0, columnspan=3, sticky="e", pady=(12, 0))
-
-        def _close():
-            dialog.destroy()
-
-        if read_only:
-            ttk.Button(actions, text="Close", command=_close).pack(side=tk.LEFT)
-        else:
-            def _save():
-                try:
-                    taylor_order = int(taylor_var.get().strip())
-                    if not 4 <= taylor_order <= 10:
-                        raise ValueError("Taylor order must be between 4 and 10.")
-
-                    fov_text = fov_var.get().strip()
-                    fov_radius_frac = None
-                    if fov_text:
-                        fov_radius_frac = float(fov_text)
-                        if fov_radius_frac <= 0:
-                            raise ValueError("FOV radius fraction must be > 0.")
-
-                    sample_threshold = float(threshold_var.get().strip())
-                    if sample_threshold <= 0:
-                        raise ValueError("Sample threshold must be > 0.")
-
-                    param_ranges = tuple(float(v.get().strip()) for v in range_vars)
-                    if any(r <= 0 for r in param_ranges):
-                        raise ValueError("All param ranges must be > 0.")
-
-                    min_db_size = int(min_db_var.get().strip())
-                    if min_db_size <= 0:
-                        raise ValueError("Min DB size must be a positive integer.")
-
-                    max_text = max_samples_var.get().strip()
-                    max_accepted_samples = None
-                    if max_text:
-                        max_accepted_samples = int(max_text)
-                        if max_accepted_samples <= 0:
-                            raise ValueError(
-                                "Max accepted samples must be a positive integer, or blank."
-                            )
-                except ValueError as exc:
-                    messagebox.showerror("Invalid value", str(exc))
-                    return
-
-                self.calib_config = replace(
-                    self.calib_config,
-                    taylor_order=taylor_order,
-                    fov_radius_frac=fov_radius_frac,
-                    sample_threshold=sample_threshold,
-                    param_ranges=param_ranges,
-                    min_db_size=min_db_size,
-                    max_accepted_samples=max_accepted_samples,
-                    save_previews_for_rejected=save_previews_var.get(),
-                )
-                # The board/taylor widgets are gone from the main window, so the
-                # dialog is the only place these live now; keep the IntVars in
-                # sync because load_images() re-reads them when it builds the
-                # Calibrator.
-                self.taylor_order.set(taylor_order)
-                self.slow_find_center.set(slow_center_var.get())
-                self.show_plots.set(show_plots_var.get())
-                if file_filter_vars is not None:
-                    # load_images() re-reads these when it globs the folder, so
-                    # the dialog is the only place they live now.
-                    self.base_name.set(base_var.get().strip())
-                    self.extension.set(ext_var.get().strip())
-                dialog.destroy()
-
-            ttk.Button(actions, text="Cancel", command=_close).pack(side=tk.LEFT, padx=(0, 6))
-            ttk.Button(actions, text="Save", command=_save).pack(side=tk.LEFT)
+        ttk.Button(body, text="Close", command=dialog.destroy).grid(
+            row=row, column=0, columnspan=3, sticky="e", pady=(12, 0)
+        )
 
         dialog.grab_set()
         dialog.wait_window()
@@ -975,18 +777,6 @@ class _BaseCalibrationApp:
     # ------------------------------------------------------------------
     # Mirroring the incoming frames
     # ------------------------------------------------------------------
-
-    def _on_mirror_toggled(self):
-        """
-        Apply the mirror switch to the incoming frames.
-
-        Flipping the stream changes the orientation of every frame, so the
-        samples accepted so far no longer describe the same view as the new
-        ones: they are dropped rather than silently mixed into one solve.
-        """
-        mirrored = bool(self.mirror.get())
-        self._apply_mirror(mirrored)
-        self._discard_samples_for_orientation_change(mirrored)
 
     def _apply_mirror(self, mirrored: bool) -> None:
         """Hand the new orientation to whoever produces the frames."""
@@ -1336,7 +1126,6 @@ class _BaseCalibrationApp:
             and self.calibrator.calibrated
             and self.calibrator.last_ocam_model is not None
         )
-        state = "normal" if calibrated else "disabled"
         self.forward_view_toggle.configure(state="normal" if calibrated else "disabled")
         # The FOV only means something while the remap is active.
         active = calibrated and self.forward_view_var.get()
@@ -1532,8 +1321,7 @@ class _BaseCalibrationApp:
 
         A mis-ordered UV-dot detection yields a plausible corners array that
         is_good_sample (which only sees four numbers) happily accepts, and it
-        then poisons the solve. Batch mode can re-run; a live session has no
-        other recovery.
+        then poisons the solve; a live session has no other recovery.
         """
         cal = self.calibrator
         if cal is None or not cal.db:
@@ -1561,6 +1349,12 @@ class _BaseCalibrationApp:
     # ------------------------------------------------------------------
 
     def calibrate(self):
+        # Stop collecting before solving so the sample db cannot change
+        # underneath cal_fromcorners; the user can restart capture after.
+        if self.consumer.capturing.is_set():
+            self.toggle_capture()
+        self.consumer.wait_until_idle()
+
         cal = self.calibrator
         if cal is None or not cal.db:
             messagebox.showinfo("No samples", "No accepted samples yet.")
@@ -1630,10 +1424,6 @@ class _BaseCalibrationApp:
             messagebox.showerror("Calibration failed", str(exc))
             self._set_status("Calibration failed.")
 
-    def _default_save_filename(self) -> str:
-        """Suggested SAVE/EXPORT filename; subclasses add their camera source."""
-        return "calib_results.txt"
-
     def _suffixed_save_filename(self, camera_id: str) -> str:
         """``calib_results_<camera_id>.txt``, or the plain default if empty."""
         camera_id = _sanitize_filename_part(camera_id)
@@ -1662,211 +1452,6 @@ class _BaseCalibrationApp:
             messagebox.showinfo("Saved", f"Saved:\n{saved}")
         except Exception as exc:
             messagebox.showerror("Save failed", str(exc))
-
-
-class BatchCalibrationApp(_BaseCalibrationApp):
-    """Folder-based app: Load / Analyze runs handle_frame over each photo."""
-
-    _has_file_filters = True
-
-    def __init__(
-        self,
-        root,
-        image_dir: str = "photos",
-        base_name: str = "",
-        extension: str = "all",
-        **kwargs,
-    ):
-        self.image_dir = tk.StringVar(value=image_dir)
-        self.base_name = tk.StringVar(value=base_name)
-        self.extension = tk.StringVar(value=extension)
-        super().__init__(root, **kwargs)
-        self._set_status("Choose a folder and click Load / Analyze Images.")
-
-    def _build_source_controls(self, parent):
-        # Base/Ext filters moved to the Advanced Settings dialog; 
-        ttk.Label(parent, text="Image folder:").grid(row=0, column=0, sticky="w")
-        ttk.Entry(parent, textvariable=self.image_dir, width=45).grid(
-            row=0, column=1, sticky="ew", padx=4
-        )
-        ttk.Button(parent, text="Browse", command=self._browse_images).grid(
-            row=0, column=2, padx=4
-        )
-        ttk.Button(parent, text="Load / Analyze Images", command=self.load_images).grid(
-            row=0, column=3, padx=8
-        )
-        parent.columnconfigure(1, weight=1)
-
-    def _browse_images(self):
-        folder = filedialog.askdirectory(initialdir=self.image_dir.get() or ".")
-        if folder:
-            self.image_dir.set(folder)
-
-    def _default_save_filename(self) -> str:
-        return self._suffixed_save_filename(
-            camera_id_from_image_dir(self.image_dir.get())
-        )
-
-    # ------------------------------------------------------------------
-    # Incremental load: one handle_frame per photo
-    # ------------------------------------------------------------------
-
-    def load_images(self):
-        try:
-            image_dir = self.image_dir.get()
-            if is_preview_dir(image_dir):
-                # This folder holds the detector's own annotated output. Both
-                # symptoms the guard exists for are visible from the window --
-                # almost nothing gets accepted, and every preview shows the
-                # markers twice -- so refuse before burning a minute of
-                # detection on it.
-                messagebox.showerror(
-                    "Wrong folder: this is the preview output",
-                    preview_dir_explanation(image_dir),
-                )
-                return
-
-            files = find_image_files(
-                image_dir,
-                self.base_name.get(),
-                self.extension.get(),
-            )
-            if not files:
-                messagebox.showerror(
-                    "No images",
-                    f"No images found in {self.image_dir.get()!r} with "
-                    f"base={self.base_name.get()!r} ext={self.extension.get()!r}.",
-                )
-                return
-
-            board = LedGridBoard(
-                n_sq_x=int(self.n_sq_x.get()),
-                n_sq_y=int(self.n_sq_y.get()),
-                spacing_mm=float(self.spacing_mm.get()),
-            )
-            run_config = replace(
-                self.calib_config,
-                taylor_order=int(self.taylor_order.get()),
-                preview_dir=str(Path(image_dir) / PREVIEW_DIR_NAME),
-            )
-            self.calibrator = Calibrator(board, run_config)
-            # New Calibrator: a coincidentally equal db length must not serve
-            # the previous run's cached guide.
-            self._guide_db_len = -1
-            self.current_sample_index = 0
-            self.save_button.configure(state="disabled")
-            self.forward_view_var.set(False)
-            self._forward_view_cache = None
-            self._forward_view_model_id = None
-            self._forward_view_key = None
-            self._sync_forward_view_controls()
-            self._write_text(self.log_box, "")
-
-            n_rejected = 0
-            n_failed = 0
-
-            for k, path in enumerate(files, start=1):
-                self._set_status(f"Analyzing image {k}/{len(files)}: {Path(path).name}")
-                # This loop blocks the event loop, so ask for the repaint
-                # _set_status no longer does on its own.
-                self.root.update_idletasks()
-                result = self.calibrator.handle_frame(read_image_gray(path), path)
-                self._append_log(f"image {k}: {result.reason}")
-                if result.detected and not result.accepted:
-                    n_rejected += 1
-                elif not result.detected:
-                    n_failed += 1
-                self._update_progress_panel()
-
-            self._show_current_sample()
-            self._set_status(
-                f"Done: {len(self.calibrator.db)} accepted, {n_rejected} rejected as "
-                f"near-duplicates, {n_failed} failed detection."
-            )
-        except Exception as exc:
-            messagebox.showerror("Load/analyze failed", str(exc))
-            self._set_status("Load/analyze failed.")
-
-
-class LiveCalibrationApp(_BaseCalibrationApp):
-    """
-    Live-topic app driven by the ROS 2 subscriber in ``live_node``.
-
-    Replaces the folder controls with an image-topic field and a
-    Start/Stop capture toggle. Two queues are drained independently:
-    ``preview_queue`` (unthrottled -- always the freshest camera frame, for
-    a responsive live view) and ``result_queue`` (throttled by
-    ``--rate_hz`` -- processed ``FrameResult``s, for the sample
-    log/accept-reject/progress panel). They used to share one throttled
-    queue, so the live view could only update as fast as detection
-    completed; decoupling them means the camera view stays live regardless
-    of detection cost. Previous/Next still browse the accepted samples.
-    """
-
-    POLL_MS = 50
-
-    # The mirror switch acts on the incoming frame stream, which only the
-    # live app has.
-    _mirror_supported = True
-    # The live Calibrator can take a new board while the stream is running.
-    _runtime_board_supported = True
-
-    def __init__(
-        self,
-        root,
-        calibrator: Calibrator,
-        result_queue,
-        preview_queue,
-        consumer,
-        subscribe_fn,
-        initial_topic: str = "image",
-        camera_id: str = "",
-        mirror: bool = False,
-        set_mirror_fn=None,
-        **kwargs,
-    ):
-        self.result_queue = result_queue
-        self.preview_queue = preview_queue
-        self.consumer = consumer
-        self.subscribe_fn = subscribe_fn
-        self.topic = tk.StringVar(value=initial_topic)
-        self._subscribed_topic = initial_topic
-        # Identifier from the driver config (wizard's --camera_id); used for
-        # the suggested SAVE filename. Empty means fall back to the topic.
-        self.camera_id = camera_id or ""
-        self.n_rejected = 0
-        self.n_failed = 0
-        self._latest_preview = None
-        self._latest_corners = None
-        self._latest_outcome = "waiting for first processed frame"
-        self._last_frame_t = time.monotonic()
-        self._fps = 0.0
-        self._stale_warned = False
-        super().__init__(root, **kwargs)
-
-        # The base class creates the mirror state; the live node owns the
-        # actual flip, so it gets the switch and the initial value.
-        self.set_mirror_fn = set_mirror_fn
-        self.mirror.set(bool(mirror))
-
-        self.calibrator = calibrator
-        # The board is a capture-time input, not a launch-time constant: the
-        # fields stay editable and the running Calibrator's board is swapped
-        # in place.
-        self._sync_board_fields()
-        # Everything else in the advanced dialog is a launch-time setting of
-        # the already-built Calibrator, so it stays view-only.
-        self._advanced_settings_read_only = True
-
-        self._refresh_capture_button()
-        self._set_status(f"Live capture running on topic '{initial_topic}'.")
-        # The pre-run readiness block is worded for a photo folder; live mode
-        # has no folder and no Load button, so restate it in topic terms.
-        self.readiness_verdict.configure(text="Waiting for frames")
-        self.readiness_action.configure(
-            text="Press Start Capture to begin collecting photos from the topic."
-        )
-        self.root.after(self.POLL_MS, self._poll_queue)
 
     def _default_save_filename(self) -> str:
         # Named after the camera identifier from the driver config (set by
@@ -2122,41 +1707,6 @@ class LiveCalibrationApp(_BaseCalibrationApp):
 
         self.root.after(self.POLL_MS, self._poll_queue)
 
-    def calibrate(self):
-        # Stop collecting before solving so the sample db cannot change
-        # underneath cal_fromcorners; the user can restart capture after.
-        if self.consumer.capturing.is_set():
-            self.toggle_capture()
-        self.consumer.wait_until_idle()
-        super().calibrate()
-
-
-def launch_gui(
-    image_dir: str = "photos",
-    base_name: str = "",
-    extension: str = "all",
-    board: LedGridBoard | None = None,
-    config: CalibratorConfig | None = None,
-    output_dir: str = ".",
-    slow_find_center: bool = False,
-    dev_mode: bool = False,
-) -> None:
-    """Launch the interactive batch (folder-based) calibration GUI."""
-    _require_gui_deps()
-    root = tk.Tk()
-    BatchCalibrationApp(
-        root,
-        image_dir=image_dir,
-        base_name=base_name,
-        extension=extension,
-        board=board,
-        config=config,
-        output_dir=output_dir,
-        slow_find_center=slow_find_center,
-        dev_mode=dev_mode,
-    )
-    root.mainloop()
-
 
 def launch_live_gui(
     calibrator: Calibrator,
@@ -2184,12 +1734,6 @@ def launch_live_gui(
         subscribe_fn=subscribe_fn,
         initial_topic=initial_topic,
         camera_id=camera_id,
-        # The live Calibrator is already built (by live_node.py's main());
-        # this seeds the (disabled, display-only) board/taylor widgets and
-        # keeps self.calib_config in sync with the real running Calibrator,
-        # not defaults, in case anything ever reads it on the live path.
-        board=calibrator.board,
-        config=CalibratorConfig.from_calibrator(calibrator),
         output_dir=output_dir,
         slow_find_center=slow_find_center,
         dev_mode=dev_mode,

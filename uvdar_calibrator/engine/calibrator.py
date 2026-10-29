@@ -75,11 +75,8 @@ class CalibratorConfig:
 
     Bundled into one object so callers pass it around as a single value
     instead of re-declaring each field as a separate parameter at every
-    hop (CLI argparser -> run()/main() -> Calibrator; GUI launch functions
-    -> app -> Calibrator) -- that duplication previously meant adding one
-    new setting required editing 6+ call sites across cli.py, live_node.py,
-    and gui.py. board geometry (n_sq_x/n_sq_y/spacing_mm) is deliberately
-    NOT here -- it already has its own home in LedGridBoard.
+    hop. Board geometry (n_sq_x/n_sq_y/spacing_mm) is deliberately NOT
+    here -- it already has its own home in LedGridBoard.
     """
 
     taylor_order: int = 4
@@ -96,10 +93,8 @@ class CalibratorConfig:
     # Hard cap on len(db): once reached, further frames are rejected rather
     # than appended, so accepted samples' full-resolution images (retained
     # for diagnostic plots and sample browsing) can't grow unbounded over a
-    # long-running session. None (default) means no cap -- fine for batch
-    # mode, where db size is already bounded by the folder's file count;
-    # live_node.py sets a real default since a live session has no such
-    # natural bound. Unrelated to min_db_size, which is a *readiness*
+    # long-running session. None (default) means no cap; live_node.py sets
+    # a real default. Unrelated to min_db_size, which is a *readiness*
     # threshold, not a retention limit.
     max_accepted_samples: Optional[int] = None
 
@@ -147,10 +142,8 @@ class Calibrator:
                 "the solver's omni_find_parameters_fun hardcodes a minimum order of 4."
             )
         self.preview_dir = Path(config.preview_dir) if config.preview_dir else None
-        # Batch mode keeps the historical behavior (a preview file for every
-        # *detected* image, accepted or not). The live node sets this False so
-        # a camera stream full of rejected near-duplicates doesn't flood the
-        # preview directory with files.
+        # The live node sets this False so a camera stream full of rejected
+        # near-duplicates doesn't flood the preview directory with files.
         self.save_previews_for_rejected = bool(config.save_previews_for_rejected)
         self.sample_threshold = float(config.sample_threshold)
         self.param_ranges = tuple(config.param_ranges)

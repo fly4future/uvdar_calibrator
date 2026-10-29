@@ -107,27 +107,43 @@ def test_circle_region_box_follows_the_cells():
     print("ok: circle-normalized box lands in the cell it names")
 
 
-def test_batch_app_draws_the_guide():
-    """The folder app must show the box too, not just the live app."""
+def test_sample_view_draws_the_guide():
+    """Browsing accepted samples shows the box, not only the live preview."""
     try:
         import tkinter as tk
     except Exception:
-        print("ok: batch app draws the guide (skipped: no tkinter)")
+        print("ok: sample view draws the guide (skipped: no tkinter)")
         return
 
     try:
         root = tk.Tk()
     except tk.TclError as exc:
-        print(f"ok: batch app draws the guide (skipped: no display -- {exc})")
+        print(f"ok: sample view draws the guide (skipped: no display -- {exc})")
         return
 
-    from uvdar_calibrator.apps.gui import BatchCalibrationApp
+    import queue
+    import threading
+
+    from uvdar_calibrator.apps.gui import LiveCalibrationApp
     from uvdar_calibrator.engine.calibrator import Calibrator, CalibratorConfig, Sample
 
+    class _StubConsumer:
+        capturing = threading.Event()
+
+        def wait_until_idle(self):
+            pass
+
     root.withdraw()
-    app = BatchCalibrationApp(root, image_dir=".")
     board = LedGridBoard(n_sq_x=6, n_sq_y=4, spacing_mm=50.0)
     cal = Calibrator(board, CalibratorConfig())
+    app = LiveCalibrationApp(
+        root,
+        calibrator=cal,
+        result_queue=queue.Queue(),
+        preview_queue=queue.Queue(),
+        consumer=_StubConsumer(),
+        subscribe_fn=lambda topic: topic,
+    )
     cal.image_size = IMAGE_SIZE
     corners = _synthetic_corners(board, cx_px=300.0, cy_px=200.0)
     cal.db.append(Sample(
@@ -137,7 +153,6 @@ def test_batch_app_draws_the_guide():
         image_path="synthetic",
         metric=cal._build_metric(corners, "synthetic"),
     ))
-    app.calibrator = cal
     app._guide_db_len = -1
 
     calls = []
@@ -147,14 +162,14 @@ def test_batch_app_draws_the_guide():
 
     assert len(calls) == 1, f"expected one render, got {len(calls)}"
     assert calls[0].get("show_guidance") is True, (
-        "the folder app must draw the guide box"
+        "the sample view must draw the guide box"
     )
-    print("ok: batch app draws the guide")
+    print("ok: sample view draws the guide")
 
 
 if __name__ == "__main__":
     test_normalized_to_pixel_inverts_sample_metric()
     test_full_frame_box_is_unchanged()
     test_circle_region_box_follows_the_cells()
-    test_batch_app_draws_the_guide()
+    test_sample_view_draws_the_guide()
     print("all checks passed")

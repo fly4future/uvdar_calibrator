@@ -16,6 +16,7 @@ import sys
 import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import rclpy  # noqa: E402
 from rclpy.executors import SingleThreadedExecutor  # noqa: E402
@@ -25,10 +26,10 @@ from uvdar_calibrator.apps.live_node import (  # noqa: E402
     CalibrationSubscriberNode,
     FrameConsumerThread,
 )
-from uvdar_calibrator.apps.replay_publisher import ImageReplayPublisher  # noqa: E402
 from uvdar_calibrator.engine.board import LedGridBoard  # noqa: E402
 from uvdar_calibrator.engine.calibrator import Calibrator, CalibratorConfig  # noqa: E402
 from uvdar_calibrator.engine.detection import find_image_files  # noqa: E402
+from replay_publisher import ImageReplayPublisher  # noqa: E402
 
 IMAGE_DIR = Path(__file__).resolve().parents[1] / "example_images"
 TIMEOUT_S = 90.0

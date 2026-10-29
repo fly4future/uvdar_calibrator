@@ -14,25 +14,6 @@ setup(
     data_files=[
         ("share/ament_index/resource_index/packages", ["resource/" + PACKAGE_NAME]),
         ("share/" + PACKAGE_NAME, ["package.xml"]),
-        (
-            "share/" + PACKAGE_NAME + "/launch",
-            ["launch/calibrate.launch.py"],
-        ),
-        (
-            "share/" + PACKAGE_NAME + "/config/libcamera",
-            [
-                "config/libcamera/camera_custom_config.yaml.template",
-                "config/libcamera/camera_calib.yaml.template",
-                "config/libcamera/session.yaml.template",
-            ],
-        ),
-        (
-            "share/" + PACKAGE_NAME + "/config/basler",
-            [
-                "config/basler/camera.yaml.template",
-                "config/basler/session.yaml.template",
-            ],
-        ),
     ],
     install_requires=["setuptools"],
     zip_safe=True,
@@ -59,9 +40,6 @@ setup(
     entry_points={
         "console_scripts": [
             "cameracalibrator = uvdar_calibrator.apps.live_node:main",
-            "calibrate_offline = uvdar_calibrator.apps.cli:main",
-            "replay_images = uvdar_calibrator.apps.replay_publisher:main",
-            "setup_camera = uvdar_calibrator.apps.camera_wizard:main",
         ],
     },
 )

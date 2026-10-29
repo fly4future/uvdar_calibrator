@@ -39,7 +39,7 @@ Run it the same way as upstream's cameracalibrator::
 There is deliberately no ``SetCameraInfo`` upload here:
 ``sensor_msgs/CameraInfo`` distortion models have no slot for the
 OCamCalib polynomial, so results are persisted locally via SAVE/EXPORT
-(``Omni_Calib_Results.npz`` + ``calib_results.txt``) instead.
+(``calib_results.txt``) instead.
 """
 
 from __future__ import annotations
@@ -60,8 +60,8 @@ from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 import sensor_msgs.msg
 
-from .cli import add_sample_selection_args, sample_selection_config_kwargs
 from .gui import launch_live_gui
+from ..engine import coverage
 from ..engine.board import LedGridBoard
 from ..engine.calibrator import Calibrator, CalibratorConfig
 from ..engine.detection import PREVIEW_DIR_NAME, mirror_horizontal
@@ -323,13 +323,70 @@ def _split_ros_args(argv: Sequence[str]) -> Tuple[List[str], Optional[List[str]]
     return app_args, (ros_args if ros_args else None)
 
 
+def add_sample_selection_args(p: argparse.ArgumentParser) -> None:
+    """
+    Add the sample-selection / readiness knobs.
+
+    These defaults were tuned against one 23-image capture set, and two of
+    them are rig-dependent: the Size target is a claim about what your lens,
+    board size and available floor space can physically reach.
+    """
+    p.add_argument(
+        "--sample_threshold",
+        type=float,
+        default=coverage.DEFAULT_SAMPLE_THRESHOLD,
+        help=(
+            "Minimum L1 distance in [x, y, size, skew] space between a candidate "
+            "and every already-accepted sample. Lower accepts more, more similar "
+            f"images. Default: {coverage.DEFAULT_SAMPLE_THRESHOLD}."
+        ),
+    )
+
+    p.add_argument(
+        "--param_ranges",
+        type=float,
+        nargs=4,
+        metavar=("X", "Y", "SIZE", "SKEW"),
+        default=None,
+        help=(
+            "Per-axis span an accepted-sample set must cover for each readiness "
+            "bar to reach 100%%. SIZE especially is rig-dependent -- if your lens "
+            "and board cannot vary apparent size that much, lower it rather than "
+            "overriding the readiness gate. Default: "
+            f"{' '.join(str(v) for v in coverage.DEFAULT_PARAM_RANGES)}."
+        ),
+    )
+
+    p.add_argument(
+        "--min_db_size",
+        type=int,
+        default=coverage.DEFAULT_MIN_DB_SIZE,
+        help=(
+            "Minimum accepted samples before calibration is considered ready. "
+            "ANDed with full per-axis range progress, so both must hold. "
+            f"Default: {coverage.DEFAULT_MIN_DB_SIZE}."
+        ),
+    )
+
+
+def sample_selection_config_kwargs(args: argparse.Namespace) -> dict:
+    """Turn the sample-selection flags into CalibratorConfig kwargs."""
+    kwargs = {
+        "sample_threshold": args.sample_threshold,
+        "min_db_size": args.min_db_size,
+    }
+    if args.param_ranges is not None:
+        kwargs["param_ranges"] = tuple(args.param_ranges)
+    return kwargs
+
+
 def _build_arg_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="ros2 run uvdar_calibrator cameracalibrator",
         description=(
             "Live OCamCalib-style calibration from a sensor_msgs/Image topic. "
             "Subscribes to 'image' (remap with image:=/camera/image_raw) and feeds "
-            "frames into the same Calibrator engine as the offline batch tool."
+            "frames into the Calibrator engine."
         ),
     )
     p.add_argument("--n_sq_x", type=int, default=6,
@@ -341,7 +398,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--taylor_order", type=int, default=4,
                    help="Polynomial degree. Default: 4.")
     p.add_argument("--output_dir", default=".",
-                   help="Folder for Omni_Calib_Results, calib_results.txt and previews.")
+                   help="Folder for calib_results.txt and previews.")
     p.add_argument("--camera_id", default="",
                    help=(
                        "Camera identifier written to the driver config by the "
@@ -372,8 +429,8 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--max_accepted_samples", type=int, default=DEFAULT_MAX_ACCEPTED_SAMPLES,
                    help=(
                        "Hard cap on accepted samples. A live session has no natural "
-                       "stopping point the way a folder of photos does, so accepted "
-                       "samples' full-resolution images (kept for diagnostic plots "
+                       "stopping point, so accepted samples' full-resolution "
+                       "images (kept for diagnostic plots "
                        "and sample browsing) would otherwise grow unbounded over a "
                        f"long-running capture. Default: {DEFAULT_MAX_ACCEPTED_SAMPLES}."
                    ))
@@ -385,12 +442,12 @@ def _build_arg_parser() -> argparse.ArgumentParser:
                    ))
     p.add_argument("--mirror", action="store_true",
                    help=(
-                    "Mirror (flip left-right) the incoming frames before they "
-                    "are shown and detected, for cameras whose driver delivers "
-                    "a mirrored image. The model that comes out describes the "
-                    "mirrored view. Can be switched at runtime from the GUI's "
-                    "Advanced Settings. Default: off."
-                    ))
+                       "Mirror (flip left-right) the incoming frames before they "
+                       "are shown and detected, for cameras whose driver delivers "
+                       "a mirrored image. The model that comes out describes the "
+                       "mirrored view. Can be switched at runtime from the GUI's "
+                       "Advanced Settings. Default: off."
+                   ))
     add_sample_selection_args(p)
     return p
 
