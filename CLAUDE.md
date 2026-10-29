@@ -11,67 +11,38 @@ checkerboard. The surrounding workflow — how photos become accepted calibratio
 how readiness is judged — mirrors ROS image_pipeline's `camera_calibration` package
 (`Calibrator`/`MonoCalibrator` + `is_good_sample`/`compute_goodenough`).
 
-The code lives in the `uvdar_calibrator/` package. There is no test suite, linter config, or
-CI — verify changes by running the CLI/GUI below against `example_images/` and checking that
-sample selection, calibration, and export still succeed.
+The code lives in the `uvdar_calibrator/` package. It runs **only in Docker**: the camera
+wizard detects the camera, starts its driver and the live calibration window. There is no
+offline/photo-folder mode and no non-Docker launch path; keep it that way.
 
 ## Running it
 
-Install deps: `pip install -r requirements.txt` (numpy, matplotlib, opencv-python). Tkinter is
-needed for the GUI *and* for the diagnostics window, so plots require it too.
-
 ```bash
-# GUI (recommended entry point)
-python -m uvdar_calibrator --image_dir photos --gui
-
-# Full CLI calibration (no GUI). Plots are opt-in, as in the GUI: add --plots for the
-# tabbed diagnostics window.
-python -m uvdar_calibrator --image_dir photos
-
-# Sample-selection / readiness check only, no calibration
-python -m uvdar_calibrator --image_dir photos --coverage_only --show_coverage
-
-# Filter by filename prefix / extension
-python -m uvdar_calibrator --image_dir photos --base_name example_ --extension bmp --gui
+./docker-dev.sh          # dev image (Dockerfile target `dev`), checkout mounted, builds + starts the wizard
+./docker-dev.sh bash     # shell in the same container
 ```
 
-Live mode without a camera — replay a photo folder onto an Image topic:
+Production is the default `Dockerfile` stage, published to
+`ghcr.io/fly4future/uvdar_calibrator` (see README). Both stages share every layer up to
+the calibrator source, so keep slow, rarely changing steps above the `base` stage's end.
+
+Tests are plain scripts (each has a `__main__`), run inside the dev container — the live
+ones need `rclpy`/`cv_bridge`:
 
 ```bash
-ros2 run uvdar_calibrator replay_images --image_dir example_images   # shell 1
-ros2 run uvdar_calibrator cameracalibrator image:=/image             # shell 2
+cd /ros2_ws/src/uvdar_calibrator
+for t in test/test_*.py; do python3 "$t" || break; done
 ```
 
-Some camera drivers deliver a left-right flipped image. `--mirror` flips the incoming
-frames back before anything else sees them, and the live GUI's "Mirror incoming frames"
-switch (Advanced Settings) does the same at runtime:
-
-```bash
-ros2 run uvdar_calibrator cameracalibrator --mirror image:=/image
-```
-
-`test/test_live_endtoend.py` drives that same pair in one process (no GUI) and asserts frames
-survive the round trip into accepted samples. Run the checks with the project venv, since the
-ROS stack is built against numpy 1.x and `cv_bridge` segfaults rather than raising under
-numpy 2:
-
-```bash
-source calibrator/bin/activate
-python test/test_coverage_rules.py && python test/test_plots_headless.py \
-    && python test/test_forward_view.py && python test/test_guide_overlay.py \
-    && python test/test_camera_wizard.py && python test/test_launch_file.py \
-    && python test/test_mirror.py \
-    && python test/test_runtime_board.py \
-    && python test/test_live_qos.py \
-    && python test/test_live_endtoend.py && python test/test_live_mirror.py
-```
+`test/test_live_endtoend.py` replays `example_images/` through `test/replay_publisher.py`
+into the real subscriber and consumer thread (no GUI). The GUI tests need a display and
+skip without one.
 
 ## Architecture
 
 ```
 uvdar_calibrator/
 ├── __init__.py             # public API: Calibrator, LedGridBoard, OCamModel, FrameResult, Sample
-├── __main__.py             # python -m uvdar_calibrator -> apps.cli.main()
 ├── engine/                 # GUI/ROS-agnostic core -- no tkinter, no rclpy, no matplotlib
 │   ├── board.py              # LedGridBoard target geometry (analogous to ROS ChessboardInfo)
 │   ├── ocam_model.py         # OCamModel dataclass + pure Scaramuzza solver math (faithful MATLAB port)
@@ -81,12 +52,10 @@ uvdar_calibrator/
 ├── diagnostics/
 │   ├── plots.py              # matplotlib diagnostics: build figures, never show them
 │   └── plot_window.py        # one Tk window, one tab per figure (the only Tk outside apps/)
-└── apps/                   # the ways to drive the engine (+ a test publisher)
-    ├── gui.py                 # Tkinter app: feeds photos (or live frames) into Calibrator, live range bars
-    ├── cli.py                  # argparse entry point (offline/batch, calibrate_offline console_script)
-    ├── live_node.py            # ROS 2 node: live topic capture (cameracalibrator console_script)
-    ├── camera_wizard.py        # camera detection + config/tmux setup (docker/calibrate.sh, setup_camera)
-    └── replay_publisher.py     # ROS 2 node: replay a photo folder onto an Image topic (replay_images)
+└── apps/
+    ├── gui.py                 # Tkinter LiveCalibrationApp: live preview, range bars, CALIBRATE/SAVE
+    ├── live_node.py            # ROS 2 node + argparse (cameracalibrator console_script)
+    └── camera_wizard.py        # camera detection + config/tmux setup (docker/calibrate.sh)
 ```
 
 ### The engine (`engine/calibrator.Calibrator`)
@@ -116,7 +85,7 @@ The direct analogue of ROS's `MonoCalibrator`. One photo == one "frame":
   error. Every board swap must go through the instance (`cal.board = ...`), never by
   rebuilding `Xt`/`Yt` at a call site.
 - `export_txt()` writes `calib_results.txt` (OCamCalib text format, computing `invpol` via
-  `findinvpoly`) and returns the path. It takes either an `output_dir` (CLI) or a full
+  `findinvpoly`) and returns the path. It takes either an `output_dir` or a full
   `path` (the GUI asks the user via `asksaveasfilename`). `.npz`/`.mat` output was removed
   — the text file is the only artifact, and that removed the package's only scipy use.
 
@@ -125,9 +94,8 @@ target spans — not raw parameter units,
 `DEFAULT_PARAM_RANGES = (0.6, 0.6, 0.3, 0.45)`, `DEFAULT_MIN_DB_SIZE = 20`) started as ROS
 camera_calibration defaults but have been retuned for this smaller/farther-captured UV grid —
 see the note at their definition. They are overridable per-run through `CalibratorConfig`, the
-GUI's Advanced Settings dialog, and the `--sample_threshold` / `--param_ranges` /
-`--min_db_size` flags shared by the CLI and the ROS node (defined once in
-`apps/cli.add_sample_selection_args` so the two entry points cannot drift).
+`--sample_threshold` / `--param_ranges` / `--min_db_size` flags of the live node
+(the GUI's Advanced Settings dialog only displays them).
 
 ### The solver (`engine/ocam_model.py`)
 
@@ -139,7 +107,7 @@ adding code that walks `ima_proc` — mixing 0- and 1-based indices here is the 
 silently corrupt results. `taylor_order` default is 4; `min_order` is hardcoded to 4 in
 `omni_find_parameters_fun`.
 
-`recomp_corner_calib` (off by default via `--refine_corners`) deliberately refines from the
+`recomp_corner_calib` (off by default) deliberately refines from the
 *measured* UV points, not from model-reprojected points — an earlier version used model
 projections as the refinement seed, which could drive reprojection error to exactly 0 because
 it compared the model against its own output. Preserve this "never seed refinement from the
@@ -159,7 +127,7 @@ order and falls back progressively:
    grids.
 
 The `Calibrator` writes per-image previews/point dumps to
-`<image_dir>/detected_marker_previews/` for every detected image (accepted or not).
+`<output_dir>/detected_marker_previews/` for accepted samples.
 
 ### Coverage (`engine/coverage.py`)
 
@@ -170,7 +138,7 @@ Two layers, only the first of which gates anything:
 - **Bin-based hint report** (`COVERAGE_*_BINS`, `sample_metric`, `compute_bin_coverage`,
   `coverage_suggestions`, `format_bin_coverage`, `plot_bin_coverage`): a supplementary
   "next images to capture" report driven off accepted samples. It must never gate the
-  CALIBRATE button or the CLI.
+  CALIBRATE button.
 
 Both layers share one coordinate frame: `get_parameters`/`sample_metric` reduce a view to
 coordinates *relative to the camera's usable region* — the full frame, or the fisheye's
@@ -182,15 +150,18 @@ the image width off on a lens with an FOV radius fraction.
 
 ### GUI (`apps/gui.py`)
 
-Tkinter app that reuses the engine directly — when changing pipeline behavior, change
-`Calibrator`/`coverage` once and both CLI and GUI pick it up. Load/Analyze runs
-`handle_frame` per photo with a live accept/reject log; the four X/Y/Size/Skew range bars
+One class, `LiveCalibrationApp`, that reuses the engine directly — change pipeline
+behavior in `Calibrator`/`coverage`, not in the GUI. It drains two queues from
+`live_node`: an unthrottled preview queue for the image and a throttled result queue for
+accept/reject. The four X/Y/Size/Skew range bars
 mirror ROS's `redraw_monocular` bars. X/Y show the span the accepted samples cover; Size and
 Skew are scored against a target, so they fill by progress instead. Green at full progress.
 CALIBRATE is driven by `goodenough` (with an explicit confirm-to-override
-when not ready); SAVE/EXPORT by `calibrated`.
+when not ready); SAVE/EXPORT by `calibrated`. Diagnostic panels are dev-mode only
+(Ctrl+D). Advanced Settings shows the launch-time `CalibratorConfig` read-only; only the
+mirror, slow-find-center and plots switches are editable.
 
-In live mode the LED-grid row is visible and editable: X/Y counts and pitch are applied
+The LED-grid row is editable: X/Y counts and pitch are applied
 to the running `Calibrator` on commit (Enter, focus-out, or a spinbox arrow). A count
 change swaps the board and *drops* the accepted samples, because they index the old
 point grid; a pitch-only change keeps them and just marks the solved model stale. The
@@ -202,8 +173,8 @@ frame detected with the old board cannot land after the clear.
 invalid input.
 
 The on-image **"put the grid here" box** (`gui.guide_box_rect` + `_draw_position_guide_on_image`)
-marks the frame cell the next photo should go into. It is drawn by *both* apps — the live
-preview and the folder app's sample view — from the same guide the sidebar text and the
+marks the frame cell the next photo should go into. It is drawn on the live preview and the
+sample view from the same guide the sidebar text and the
 coverage graph use, so the three cannot disagree. `test/test_guide_overlay.py` pins the
 geometry down (full-frame placement unchanged; circle-normalized placement lands in the cell
 it names).
@@ -245,16 +216,6 @@ libcamera probe keeps the sysfs `i2c ∩ media` heuristic and falls back to all
 device-tree nodes when nothing pairs up. `test/test_camera_wizard.py` checks
 the probe, the selection rules and that generated configs still match the
 templates (including placeholder substitution).
-
-`launch/calibrate.launch.py` is the non-Docker sibling: `ros2 launch
-uvdar_calibrator calibrate.launch.py camera:=auto` calls the same
-`detect_cameras`/`resolve_*`/`prepare_*` functions, seeds the *installed*
-templates into a writable `config_dir` (`~/.ros/uvdar_calibrator/config`),
-includes the driver launch and remaps `image` to `PreparedCamera.topic`. It
-never prompts (`camera:=auto` fails when the choice is not unique). This
-environment has no `launch`/`launch_ros`, so it is only `py_compile`/flake8
-guarded; its driver arguments mirror the tmux session templates, which remain
-the source of truth.
 
 Note `n_sq_x`/`n_sq_y` in the board config are unrelated to the camera side
 configs `config/<camera>/`; don't confuse the two directories.
