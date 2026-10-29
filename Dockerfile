@@ -7,7 +7,7 @@ ARG PYLON_ARM64_URL=https://downloads-ctf.baslerweb.com/dg51pdwahxgw/6EUPou5YlZl
 ARG PYLON_SUPPLEMENTARY_AMD64_URL=https://downloads-ctf.baslerweb.com/dg51pdwahxgw/1SEETUq8OWph5FCGgdtgKV/42f1b4b97db98eaf3b552345cf2c8031/pylon-supplementary-package-for-blaze-1.7.3.73dbe706a_amd64.deb
 ARG PYLON_SUPPLEMENTARY_ARM64_URL=https://downloads-ctf.baslerweb.com/dg51pdwahxgw/rS4LtLwhOsISlqjWeMKnY/a0fd95ed967c92bd5d928b77e1955db8/pylon-supplementary-package-for-blaze-1.7.3.73dbe706a_arm64.deb
 
-FROM ctumrs/mrs_uav_system:${MRS_VERSION}
+FROM ctumrs/mrs_uav_system:${MRS_VERSION} AS base
 
 ARG ROS_DISTRO
 ARG TARGETPLATFORM
@@ -22,6 +22,7 @@ ENV LC_ALL=C.UTF-8
 ENV TERM=xterm-256color
 ENV COLORTERM=truecolor
 ENV RCUTILS_COLORIZED_OUTPUT=1
+ENV PYTHONDONTWRITEBYTECODE=1
 
 # Download the Basler Pylon SDK (.debs tars) for the target platform. TARGETPLATFORM is set automatically by buildkit
 RUN mkdir -p /tmp/basler-camera-drivers && \
@@ -40,6 +41,7 @@ RUN mkdir -p /tmp/basler-camera-drivers && \
     tmux \
     tmuxinator \
     python3-pip \
+    python3-pytest \
     ros-${ROS_DISTRO}-libcamera-ros-driver \
     /tmp/basler-camera-drivers/*.deb \
     && rm -rf /tmp/basler-camera-drivers /var/lib/apt/lists/*
@@ -47,30 +49,45 @@ RUN mkdir -p /tmp/basler-camera-drivers && \
 # pypylon is used to list Basler cameras by serial number
 RUN pip3 install --break-system-packages pypylon
 
-# Create workspace
-RUN mkdir -p /ros2_ws
-WORKDIR /ros2_ws
-RUN echo "source /opt/ros/${ROS_DISTRO}/setup.bash" >> /root/.bashrc
+RUN . /opt/ros/${ROS_DISTRO}/setup.sh && (rosdep init || true) && rosdep update
 
-# Clone driver for Basler cameras
-RUN git clone --depth 1 --branch ros2 https://github.com/ctu-mrs/pylon-ros-camera.git /ros2_ws/src/pylon-ros-camera
+# The Basler driver goes into its own underlay workspace, so building the mounted
+# calibrator workspace never rebuilds it
+RUN git clone --depth 1 --branch ros2 https://github.com/ctu-mrs/pylon-ros-camera.git /deps_ws/src/pylon-ros-camera
 
-# Copy source code into the workspace
-COPY . /ros2_ws/src/uvdar_calibrator
-
-# Install the workspace's ROS dependencies
 RUN . /opt/ros/${ROS_DISTRO}/setup.sh && \
-    (rosdep init || true) && rosdep update && \
     apt-get update && \
-    rosdep install --from-paths /ros2_ws/src --ignore-src -r -y && \
+    rosdep install --from-paths /deps_ws/src --ignore-src -r -y && \
     rm -rf /var/lib/apt/lists/*
 
-RUN mkdir -p /calibration_output && chmod +x /ros2_ws/src/uvdar_calibrator/docker/calibrate.sh
+WORKDIR /deps_ws
+RUN . /opt/ros/${ROS_DISTRO}/setup.sh && colcon build
 
-# Build the workspace
+# Only package.xml is needed to resolve the calibrator's dependencies
+COPY package.xml /tmp/uvdar_calibrator/package.xml
+
+RUN . /opt/ros/${ROS_DISTRO}/setup.sh && \
+    apt-get update && \
+    rosdep install --from-paths /tmp/uvdar_calibrator --ignore-src -r -y && \
+    rm -rf /var/lib/apt/lists/* /tmp/uvdar_calibrator
+
+RUN mkdir -p /ros2_ws/src /calibration_output
+WORKDIR /ros2_ws
+
+# Source ROS and the driver underlay, plus the calibrator workspace once it has been built
+RUN echo "source /opt/ros/${ROS_DISTRO}/setup.bash" >> /root/.bashrc && \
+    echo "source /deps_ws/install/setup.bash" >> /root/.bashrc && \
+    echo "[ -f /ros2_ws/install/setup.bash ] && source /ros2_ws/install/setup.bash" >> /root/.bashrc
+
+# Development image (./docker-dev.sh): the checkout is mounted at
+# /ros2_ws/src/uvdar_calibrator and rebuilt on every start (only this package,
+# and incrementally, since build/install live in volumes)
+FROM base AS dev
+CMD ["bash", "-c", "colcon build --symlink-install && exec src/uvdar_calibrator/docker/calibrate.sh"]
+
+# Production image (default target): the source is baked in and prebuilt
+FROM base
+ARG ROS_DISTRO
+COPY . /ros2_ws/src/uvdar_calibrator
 RUN . /opt/ros/${ROS_DISTRO}/setup.sh && colcon build --symlink-install
-
-# Ensure that the ROS 2 workspace is sourced in the bash shell
-RUN echo "source /ros2_ws/install/setup.bash" >> /root/.bashrc
-
 CMD ["/ros2_ws/src/uvdar_calibrator/docker/calibrate.sh"]

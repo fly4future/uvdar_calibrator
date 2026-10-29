@@ -2,7 +2,7 @@ services:
   dev:
     build:
       context: .
-      dockerfile: Dockerfile.dev
+      target: dev
     image: uvdar_calibrator:dev
     network_mode: host
     privileged: true

@@ -4,5 +4,7 @@ venv/
 .venv/
 .vscode/
 docker-dev.sh
+compose.dev.yaml
+calibration_output/
 doc/
 .fig/
