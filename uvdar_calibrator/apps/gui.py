@@ -279,6 +279,11 @@ class LiveCalibrationApp:
         self._guide_cache = None
         self._guide_db_len = -1
         self.photo_ref = None
+        self._image_item = None
+        # Live preview pacing: a new camera frame is drawn at most once, and
+        # not before _next_render_t (see _poll_queue).
+        self._preview_dirty = False
+        self._next_render_t = 0.0
         self._forward_view_cache = None        # (map_x, map_y) or None
         self._forward_view_model_id = None     # id(last built-from model)
         # The cache is also keyed on mode+hfov, both of which can now
@@ -350,7 +355,6 @@ class LiveCalibrationApp:
         main.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
 
         left = ttk.Frame(main)
-        left.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
         # The right sidebar's fixed-height content (range bars, coverage
         # graph, log) can exceed a short screen. It is therefore wrapped in a
@@ -359,6 +363,9 @@ class LiveCalibrationApp:
         # of window height.
         right = ttk.Frame(main, width=340)
         right.pack(side=tk.RIGHT, fill=tk.BOTH, padx=(10, 0))
+        # Packed after the sidebar, so a long caption under the image is cut
+        # off instead of squeezing the sidebar.
+        left.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         right.pack_propagate(False)
 
         # Packed first so the scroll region above it never takes its space.
@@ -444,16 +451,16 @@ class LiveCalibrationApp:
         # views (8 accepted samples)" label"
         self.readiness_verdict = ttk.Label(
             sidebar, text="Waiting for frames", font=self.theme.font(13, "bold"),
-            wraplength=340, justify="center",
+            wraplength=300, justify="center",
         )
         self.readiness_action = ttk.Label(
             sidebar,
             text="Press Start Capture to begin collecting photos from the topic.",
-            font=self.theme.font(10), wraplength=340, justify="center",
+            font=self.theme.font(10), wraplength=300, justify="center",
         )
         self.readiness_detail = ttk.Label(
             sidebar, text="", font=self.theme.font(8), foreground=self.theme.muted,
-            wraplength=340, justify="center",
+            wraplength=300, justify="center",
         )
 
         # Four ROS-style range bars: X, Y, Size, Skew.
@@ -1023,7 +1030,8 @@ class LiveCalibrationApp:
         cw = max(50, self.image_canvas.winfo_width())
         ch = max(50, self.image_canvas.winfo_height())
         h, w = preview.shape[:2]
-        scale = min(cw / w, ch / h)
+        # Never upscale: it adds pixels to draw without adding detail.
+        scale = min(cw / w, ch / h, 1.0)
         nw, nh = max(1, int(w * scale)), max(1, int(h * scale))
         resized = cv2.resize(preview, (nw, nh), interpolation=cv2.INTER_AREA)
         rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
@@ -1031,8 +1039,13 @@ class LiveCalibrationApp:
         if not ok:
             return
         self.photo_ref = tk.PhotoImage(data=buf.tobytes())
-        self.image_canvas.delete("all")
-        self.image_canvas.create_image(cw // 2, ch // 2, image=self.photo_ref, anchor="center")
+        if self._image_item is None:
+            self._image_item = self.image_canvas.create_image(
+                cw // 2, ch // 2, image=self.photo_ref, anchor="center"
+            )
+        else:
+            self.image_canvas.coords(self._image_item, cw // 2, ch // 2)
+            self.image_canvas.itemconfigure(self._image_item, image=self.photo_ref)
         self.image_label.configure(text=caption)
 
     def _show_current_sample(self):
@@ -1379,6 +1392,11 @@ class LiveCalibrationApp:
             if was_running:
                 self.consumer.capturing.set()
 
+    def _preview_drawn(self, started: float) -> None:
+        """Allow the next preview frame after a pause as long as this draw took."""
+        done = time.monotonic()
+        self._next_render_t = done + (done - started)
+
     def _drain_frame_queues(self) -> None:
         """Throw away frames converted under the previous orientation."""
         raw_queue = getattr(self.consumer, "raw_queue", None)
@@ -1436,6 +1454,7 @@ class LiveCalibrationApp:
                 break
         if latest_preview is not None:
             self._latest_preview = latest_preview
+            self._preview_dirty = True
             now = time.monotonic()
             dt = now - self._last_frame_t
             if dt > 0:
@@ -1445,11 +1464,20 @@ class LiveCalibrationApp:
             self._last_frame_t = now
             self._stale_warned = False
 
-        if self.consumer.capturing.is_set() and self._latest_preview is not None:
+        # Draw each new camera frame once, then leave the event loop free for
+        # at least as long as the draw took, so drawing never uses more than
+        # half of it. The canvas repaints in an idle handler, so the draw time
+        # is taken from an idle callback queued behind it.
+        now = time.monotonic()
+        if (self.consumer.capturing.is_set() and self._preview_dirty
+                and now >= self._next_render_t):
             img, pts = self._apply_forward_view(self._latest_preview, self._latest_corners)
             self._render_frame(
                 img, pts, f"Live preview: {self._latest_outcome}", show_guidance=True,
             )
+            self._preview_dirty = False
+            self._next_render_t = float("inf")  # until the repaint has happened
+            self.root.after_idle(self._preview_drawn, now)
         # Outside the render branch on purpose: a stream that stopped
         # delivering has no preview to render, and that is exactly when the
         # user needs to be told. A wrong-QoS or wrong-topic subscription is
