@@ -12,7 +12,7 @@
 #
 # All arguments are passed through unchanged. This script stays tiny on
 # purpose: the wizard is Python so it can be tested without bash, Docker or a
-# camera, and the same module backs setup_camera and the ROS launch file.
+# camera.
 set -euo pipefail
 
 SCRIPT=$(readlink -f "$0")

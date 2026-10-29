@@ -76,6 +76,7 @@ def test_scan_follows_of_node_symlinks():
             (sysfs / "bus/i2c/devices/0-0036/of_node", targets["i2c@80000"]),
             (sysfs / "class/video4linux/video0/of_node", targets["i2c@80000"]),
             (sysfs / "class/media/media0/of_node", targets["i2c@80000"]),
+            (sysfs / "bus/i2c/devices/1-0010/of_node", targets["i2c@80001"]),
             (sysfs / "class/video4linux/video1/device/of_node", targets["i2c@80001"]),
         ]
         try:
@@ -223,29 +224,6 @@ def test_generated_configs_match_the_templates():
     print("ok: configs are regenerated from the templates and fully filled")
 
 
-def test_seed_templates_for_a_runtime_dir():
-    """The launch path generates configs outside the (read-only) install tree."""
-    with tempfile.TemporaryDirectory() as tmp:
-        config_root = Path(tmp) / "runtime-config"
-        cw.seed_templates(config_root, _REPO_ROOT / "config")
-        assert (config_root / "libcamera" / "camera_calib.yaml.template").is_file()
-        assert (config_root / "basler" / "camera.yaml.template").is_file()
-
-        prepared = cw.prepare_basler(
-            config_root, cw.CameraDevice("basler", "42", "42 acA1300"),
-        )
-        assert prepared.topic == "/uvdar_calibrator/camera/image_raw"
-        assert 'device_serial_number: "42"' in prepared.driver_config.read_text()
-
-        try:
-            cw.seed_templates(Path(tmp) / "elsewhere", Path(tmp) / "no-templates")
-        except FileNotFoundError:
-            pass
-        else:
-            raise AssertionError("an empty template root must be an error")
-    print("ok: templates seed a writable config dir for the launch path")
-
-
 def test_main_hands_off_and_refuses_ambiguity():
     """--yes must never prompt: one camera configures, two abort with advice."""
     two = {"basler": cw.Detection("basler", [
@@ -317,7 +295,6 @@ if __name__ == "__main__":
     test_basler_listing_never_raises()
     test_selection_prefers_unambiguous_answers()
     test_generated_configs_match_the_templates()
-    test_seed_templates_for_a_runtime_dir()
     test_main_hands_off_and_refuses_ambiguity()
     test_list_is_a_pure_query()
     test_docker_entry_point_calls_the_wizard()

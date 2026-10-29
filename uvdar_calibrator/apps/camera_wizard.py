@@ -277,22 +277,6 @@ def kind_for_device(
 # ---------------------------------------------------------------------------
 
 
-def seed_templates(config_root: Path, template_root: Path) -> None:
-    """Copy ``config/<type>/*.template`` beside where generated configs go."""
-    copied = 0
-    for kind in ("libcamera", "basler"):
-        source = Path(template_root) / kind
-        target = Path(config_root) / kind
-        if not source.is_dir():
-            continue
-        target.mkdir(parents=True, exist_ok=True)
-        for template in sorted(source.glob("*.template")):
-            shutil.copyfile(template, target / template.name)
-            copied += 1
-    if not copied:
-        raise FileNotFoundError(f"no config templates found in {template_root}")
-
-
 def _copy_template(path: Path) -> None:
     template = path.with_name(path.name + ".template")
     if not template.is_file():
@@ -420,7 +404,7 @@ def _select(message: str, options: Sequence[str]) -> int:
 
 
 def format_detections(detections: Dict[str, Detection]) -> str:
-    """Human-readable summary of a probe result (also used by the launch file)."""
+    """Human-readable summary of a probe result."""
     lines = ["Detected cameras:"]
     for kind, det in detections.items():
         if det.devices:
