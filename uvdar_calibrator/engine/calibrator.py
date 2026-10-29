@@ -25,7 +25,7 @@ import numpy as np
 
 from . import coverage
 from .board import LedGridBoard
-from .detection import get_corners, save_detected_marker_preview
+from .detection import PATTERN_LED_GRID, get_corners, save_detected_marker_preview
 from .ocam_model import (
     calibrate,
     export_data,
@@ -81,6 +81,9 @@ class CalibratorConfig:
 
     taylor_order: int = 4
     preview_dir: Optional[str] = None
+    # Which target get_corners looks for: detection.PATTERN_LED_GRID or
+    # detection.PATTERN_CHESSBOARD.
+    pattern: str = PATTERN_LED_GRID
     sample_threshold: float = coverage.DEFAULT_SAMPLE_THRESHOLD
     param_ranges: Tuple[float, float, float, float] = coverage.DEFAULT_PARAM_RANGES
     min_db_size: int = coverage.DEFAULT_MIN_DB_SIZE
@@ -113,6 +116,7 @@ class CalibratorConfig:
         """
         return cls(
             taylor_order=calibrator.taylor_order,
+            pattern=calibrator.pattern,
             preview_dir=str(calibrator.preview_dir) if calibrator.preview_dir else None,
             sample_threshold=calibrator.sample_threshold,
             param_ranges=calibrator.param_ranges,
@@ -142,6 +146,7 @@ class Calibrator:
                 "the solver's omni_find_parameters_fun hardcodes a minimum order of 4."
             )
         self.preview_dir = Path(config.preview_dir) if config.preview_dir else None
+        self.pattern = config.pattern
         # The live node sets this False so a camera stream full of rejected
         # near-duplicates doesn't flood the preview directory with files.
         self.save_previews_for_rejected = bool(config.save_previews_for_rejected)
@@ -249,7 +254,7 @@ class Calibrator:
                 ),
             )
 
-        ok, corners, _ = get_corners(image, self.board)
+        ok, corners, _ = get_corners(image, self.board, self.pattern)
 
         if not ok or corners is None:
             return self._result(

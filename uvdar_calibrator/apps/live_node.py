@@ -64,7 +64,7 @@ from .gui import launch_live_gui
 from ..engine import coverage
 from ..engine.board import LedGridBoard
 from ..engine.calibrator import Calibrator, CalibratorConfig
-from ..engine.detection import PREVIEW_DIR_NAME, mirror_horizontal
+from ..engine.detection import PATTERNS, PREVIEW_DIR_NAME, mirror_horizontal
 
 DEFAULT_RATE_HZ = 2.0
 # A live session has no natural stopping point the way a folder of photos
@@ -395,6 +395,13 @@ def _build_arg_parser() -> argparse.ArgumentParser:
                    help="Squares along y direction. Default: 4.")
     p.add_argument("--spacing_mm", type=float, default=50.0,
                    help="Grid spacing in millimeters. Default: 50.")
+    p.add_argument("--pattern", choices=PATTERNS, default=PATTERNS[0],
+                   help=(
+                       "Calibration target: the UV LED grid, or a printed "
+                       "checkerboard whose inner corners match the grid size. "
+                       "Can be switched in the GUI's Advanced Settings. "
+                       f"Default: {PATTERNS[0]}."
+                   ))
     p.add_argument("--taylor_order", type=int, default=4,
                    help="Polynomial degree. Default: 4.")
     p.add_argument("--output_dir", default=".",
@@ -465,6 +472,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     )
     config = CalibratorConfig(
         taylor_order=args.taylor_order,
+        pattern=args.pattern,
         preview_dir=str(Path(args.output_dir) / PREVIEW_DIR_NAME),
         # A live stream produces an endless supply of detected-but-rejected
         # near-duplicates; only write preview files for accepted samples.

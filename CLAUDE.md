@@ -46,7 +46,7 @@ uvdar_calibrator/
 ├── engine/                 # GUI/ROS-agnostic core -- no tkinter, no rclpy, no matplotlib
 │   ├── board.py              # LedGridBoard target geometry (analogous to ROS ChessboardInfo)
 │   ├── ocam_model.py         # OCamModel dataclass + pure Scaramuzza solver math (faithful MATLAB port)
-│   ├── detection.py          # pattern detection: chessboard -> circle grid -> UV bright-dot fallback
+│   ├── detection.py          # pattern detection: UV LED grid (circle grid) or checkerboard
 │   ├── coverage.py           # get_parameters/is_good_sample/compute_goodenough (+ bin-based hint report)
 │   └── calibrator.py         # Calibrator engine: db/goodenough/handle_frame/cal_fromcorners/export
 ├── diagnostics/
@@ -115,16 +115,19 @@ model" invariant if touching this function.
 
 ### Detection (`engine/detection.py`)
 
-`get_corners(img, board)` returns `(ok, corners, board)` like ROS. Detection is tried in
-order and falls back progressively:
+`get_corners(img, board, pattern)` returns `(ok, corners, board)` like ROS. `pattern`
+(`CalibratorConfig.pattern`, `--pattern`, switchable in Advanced Settings) selects one
+detector; there is no fallback chain:
 
-1. OpenCV `findChessboardCorners`/`findChessboardCornersSB` (in case a real checkerboard is
-   used instead of the LED grid).
-2. OpenCV `findCirclesGrid` symmetric grid detection with a blob detector tuned for small
-   bright dots.
-3. A custom UV bright-dot fallback: Otsu threshold → connected components → group into
-   rows/columns by spacing → `_order_uv_points_projective` as a last resort for rotated/skewed
-   grids.
+- `"led"` (default): OpenCV `findCirclesGrid` (symmetric grid, both orientations) with a
+  blob detector tuned for small bright dots.
+- `"chessboard"`: a printed checkerboard whose inner corners form the same point grid.
+  `findChessboardCorners` **must** keep `CALIB_CB_FAST_CHECK`: without it a frame with no
+  board costs a full search, which measured 80 s on one noisy 1280x800 frame on a Pi 5.
+
+Detection used to try the checkerboard first on every frame and fall back to a custom
+bright-dot grouper; the first never matched an LED grid and stalled live mode, the second
+rescued 2 of 26 example images. Don't reintroduce either as an automatic fallback.
 
 The `Calibrator` writes per-image previews/point dumps to
 `<output_dir>/detected_marker_previews/` for accepted samples.

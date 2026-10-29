@@ -16,7 +16,7 @@ into :class:`~uvdar_calibrator.engine.calibrator.Calibrator` and shows:
 
 from __future__ import annotations
 
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 import math
@@ -31,6 +31,7 @@ from ..engine import coverage
 from ..engine import ocam_model
 from ..engine.board import LedGridBoard
 from ..engine.calibrator import Calibrator, CalibratorConfig
+from ..engine.detection import PATTERN_CHESSBOARD, PATTERN_LED_GRID
 
 try:
     import cv2
@@ -263,6 +264,8 @@ class LiveCalibrationApp:
         # switchable at runtime in the Advanced Settings dialog; the live node
         # owns the actual flip.
         self.mirror = tk.BooleanVar(value=bool(mirror))
+        # Which target the detector looks for; switchable at runtime.
+        self.pattern = tk.StringVar(value=calibrator.pattern)
         self.set_mirror_fn = set_mirror_fn
         # Rectilinear FOV. Wider shows more of the frame but adds black corners:
         # a rectilinear projection breaks down past ~90 deg off-axis.
@@ -673,9 +676,8 @@ class LiveCalibrationApp:
         The Calibrator's launch-time configuration (taylor_order,
         fov_radius_frac, sample_threshold, param_ranges, min_db_size,
         max_accepted_samples, save_previews_for_rejected) is shown read-only:
-        the running Calibrator can't be reconfigured mid-capture. The switches
-        that act outside it -- mirroring, slow Find Center, plots -- stay
-        editable.
+        the running Calibrator can't be reconfigured mid-capture. The target,
+        mirroring, slow Find Center and plots switches stay editable.
         """
         cfg = self.calib_config
 
@@ -729,6 +731,26 @@ class LiveCalibrationApp:
         for label, value, hint in rows:
             _value_row(row, label, value, hint)
             row += 1
+
+        _separator(row)
+        row += 1
+        _section(row, "Calibration target")
+        row += 1
+        for value, text in (
+            (PATTERN_LED_GRID, "UV LED grid"),
+            (PATTERN_CHESSBOARD, "Printed checkerboard (inner corners = LED grid points)"),
+        ):
+            ttk.Radiobutton(
+                body, text=text, value=value, variable=self.pattern,
+                command=self._on_pattern_changed,
+            ).grid(row=row, column=0, columnspan=3, sticky="w")
+            row += 1
+        ttk.Label(
+            body,
+            text="switching drops the samples captured for the other target",
+            font=self.theme.font(8), foreground=self.theme.muted,
+        ).grid(row=row, column=0, columnspan=3, sticky="w")
+        row += 1
 
         _separator(row)
         row += 1
@@ -1512,29 +1534,13 @@ class LiveCalibrationApp:
             return "break"
 
         if (board.n_sq_x, board.n_sq_y) != (old.n_sq_x, old.n_sq_y):
-            # Pause first: the consumer converts frames independently of the
-            # Tk thread, and one accepted after the clear would mix the two
-            # point grids in a single solve.
-            was_running = self.consumer.capturing.is_set()
-            if was_running:
-                self.consumer.capturing.clear()
-            self.consumer.wait_until_idle()
-            # Hold the conversion lock while the grid is replaced: a frame the
-            # consumer already pulled off the queue must be detected with the
-            # new board (or not at all), never accepted into the cleared db
-            # under the old one.
-            gate = getattr(self.consumer, "handle_lock", None) or nullcontext()
-            with gate:
-                self._drain_frame_queues()
+            with self._capture_paused():
                 cal.board = board
                 self._discard_samples(
                     f"LED grid {board.n_sq_x} x {board.n_sq_y}, "
                     f"{board.spacing_mm:g} mm",
                     "captured for the previous grid",
                 )
-
-            if was_running:
-                self.consumer.capturing.set()
             self._set_status(
                 f"LED grid {board.n_sq_x} x {board.n_sq_y}, "
                 f"{board.spacing_mm:g} mm spacing: capture a new set."
@@ -1595,25 +1601,56 @@ class LiveCalibrationApp:
         The consumer thread pulls frames off the raw queue independently of
         the GUI, so a frame converted before the switch could still be
         accepted afterwards and mix two orientations in a single solve.
-        Capture is therefore paused for the switch, the queues are drained,
-        and capture resumes.
+        Capture is therefore paused for the switch.
         """
         mirrored = bool(self.mirror.get())
-        was_running = self.consumer.capturing.is_set()
-        if was_running:
-            self.consumer.capturing.clear()
-        self.consumer.wait_until_idle()
-        self._drain_frame_queues()
-
-        self._apply_mirror(mirrored)
-        self._discard_samples_for_orientation_change(mirrored)
-
-        if was_running:
-            self.consumer.capturing.set()
+        with self._capture_paused():
+            self._apply_mirror(mirrored)
+            self._discard_samples_for_orientation_change(mirrored)
         self._set_status(
             f"Live capture on '{self._subscribed_topic}': incoming frames are "
             f"{'mirrored' if mirrored else 'not mirrored'}."
         )
+
+    def _on_pattern_changed(self):
+        """
+        Switch between the UV LED grid and a printed checkerboard.
+
+        A different target means different points, so the samples captured
+        for the old one are dropped, the same as for a new grid size.
+        """
+        pattern = self.pattern.get()
+        cal = self.calibrator
+        if cal is None or pattern == cal.pattern:
+            return
+        with self._capture_paused():
+            cal.pattern = pattern
+            self._discard_samples(f"target: {pattern}", "captured for the previous target")
+        label = "checkerboard" if pattern == PATTERN_CHESSBOARD else "UV LED grid"
+        self._set_status(f"Detecting a {label}: capture a new set.")
+
+    @contextmanager
+    def _capture_paused(self):
+        """
+        Pause the consumer, drop queued frames, and resume afterwards.
+
+        The consumer converts frames independently of the Tk thread, so a
+        frame processed under the old view or target could otherwise land in
+        the db after it has been cleared. The conversion lock is held for the
+        duration: a frame the consumer already pulled off the queue is
+        detected under the new settings, or not at all.
+        """
+        was_running = self.consumer.capturing.is_set()
+        if was_running:
+            self.consumer.capturing.clear()
+        self.consumer.wait_until_idle()
+        try:
+            with getattr(self.consumer, "handle_lock", None) or nullcontext():
+                self._drain_frame_queues()
+                yield
+        finally:
+            if was_running:
+                self.consumer.capturing.set()
 
     def _drain_frame_queues(self) -> None:
         """Throw away frames converted under the previous orientation."""

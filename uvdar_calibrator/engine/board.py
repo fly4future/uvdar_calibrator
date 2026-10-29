@@ -1,10 +1,10 @@
 """
 Calibration target descriptor.
 
-Analogous to ROS camera_calibration's ``ChessboardInfo``, minus the
-pattern/ArUco fields: there is exactly one pattern kind here, the UV LED
-grid (with a checkerboard/circle-grid detection fallback tried first for
-robustness, not as a user-selectable mode).
+Analogous to ROS camera_calibration's ``ChessboardInfo``. The same
+geometry describes a UV LED grid (the default) and a printed checkerboard:
+the LEDs and the checkerboard's inner corners play the same role. Which one
+is detected is ``CalibratorConfig.pattern``.
 """
 
 from __future__ import annotations

@@ -97,8 +97,15 @@ Advanced Settings flips the frames back before the preview, the detection and th
 saved model see them. Switching it drops the samples captured so far, since they
 describe the other orientation.
 
+## Checkerboard Target
+
+Instead of the UV LED grid you can calibrate against a printed checkerboard: pick
+**Printed checkerboard** under *Calibration target* in Advanced Settings. Its inner
+corners take the place of the LEDs, so set the LED grid fields to match (a 6 x 4 grid
+is a checkerboard of 7 x 5 squares). Switching drops the samples captured so far.
+
 ## Advanced Settings
 
 Shows the sample-selection settings the session was started with (read-only), plus
-the switches for the slow MATLAB-style center search, the diagnostics plots and
-mirroring.
+the switches for the calibration target, the slow MATLAB-style center search, the
+diagnostics plots and mirroring.
