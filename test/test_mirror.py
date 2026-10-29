@@ -161,21 +161,25 @@ def test_mirrored_calibration_is_still_good():
     files = find_image_files(str(IMAGE_DIR))
     assert files, f"no example images in {IMAGE_DIR}"
 
-    calibrator = Calibrator(BOARD, CalibratorConfig())
-    for path in files:
-        calibrator.handle_frame(mirror_horizontal(read_image_gray(path)), path)
+    def solve(mirrored):
+        cal = Calibrator(BOARD, CalibratorConfig())
+        for path in files:
+            img = read_image_gray(path)
+            cal.handle_frame(mirror_horizontal(img) if mirrored else img, path)
+        with contextlib.redirect_stdout(io.StringIO()):
+            cal.cal_fromcorners()
+        return cal
 
-    with contextlib.redirect_stdout(io.StringIO()):
-        calibrator.cal_fromcorners(do_find_center=True, fast_find_center=True)
-
+    plain = solve(False).last_ocam_model
+    calibrator = solve(True)
     model = calibrator.last_ocam_model
     assert model is not None, "the mirrored calibration produced no model"
     avg_error = float(np.nanmean(calibrator.reprojection_err))
     assert avg_error < 1.0, f"average reprojection error {avg_error:.3f} px"
 
     # The column centre moves with the mirror; the row centre does not.
-    assert abs(model.xc - 272.7) < 3.0, model.xc
-    assert abs(model.yc - (960 - 1 - 515.448)) < 3.0, model.yc
+    assert abs(model.xc - plain.xc) < 1.0, (model.xc, plain.xc)
+    assert abs(model.yc - (960 - 1 - plain.yc)) < 1.0, (model.yc, plain.yc)
 
     rms = _forward_view_collinearity(calibrator, model)
     assert rms is not None, "no full detections to measure"

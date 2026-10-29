@@ -107,5 +107,4 @@ is a checkerboard of 7 x 5 squares). Switching drops the samples captured so far
 ## Advanced Settings
 
 Shows the sample-selection settings the session was started with (read-only), plus
-the switches for the calibration target, the slow MATLAB-style center search, the
-diagnostics plots and mirroring.
+the switches for the calibration target, the diagnostics plots and mirroring.

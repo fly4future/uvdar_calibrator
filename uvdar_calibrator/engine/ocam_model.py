@@ -77,10 +77,12 @@ def _solve_poly_root_per_sample(
     Shared root-finding core for omni3d2pixel and invFUN.
 
     For each sample ``m[j]``, shifts ``poly_coef``'s second-to-last
-    coefficient by ``m[j]`` and solves for real, positive roots via
-    ``np.roots``. Returns NaN for a sample with no unique accepted root
-    (checked via ``np.isfinite``/``np.isnan`` by every caller, so NaN is
-    the correct "unresolved" sentinel regardless of caller).
+    coefficient by ``m[j]`` and solves for real, positive roots -- the
+    companion-matrix eigenvalues ``np.roots`` uses, for all samples in one
+    batched call.
+    Returns NaN for a sample with no unique accepted root (checked via
+    ``np.isfinite``/``np.isnan`` by every caller, so NaN is the correct
+    "unresolved" sentinel regardless of caller).
 
     omni3d2pixel and invFUN genuinely disagree on two points, verified
     against synthetic test data (single-root, multi-root, and
@@ -94,26 +96,28 @@ def _solve_poly_root_per_sample(
       the smallest (``pick_min_on_multiple=True``); invFUN leaves that
       sample unresolved instead of guessing (``pick_min_on_multiple=False``).
     """
-    result = np.full_like(m, np.nan, dtype=float)
+    m = np.asarray(m, dtype=float)
+    poly = np.tile(np.asarray(poly_coef, dtype=float), (m.size, 1))
+    poly[:, -2] -= m
 
-    for j, mj in enumerate(m):
-        poly_tmp = poly_coef.copy()
-        poly_tmp[-2] = poly_coef[-2] - mj
+    # The companion matrix np.roots builds, for every sample at once. The
+    # fitted polynomial's leading and constant terms are never exactly zero,
+    # so np.roots' zero stripping never applies.
+    degree = poly.shape[1] - 1
+    companion = np.zeros((m.size, degree, degree))
+    companion[:, 0, :] = -poly[:, 1:] / poly[:, :1]
+    companion[:, np.arange(1, degree), np.arange(degree - 1)] = 1.0
+    all_roots = np.linalg.eigvals(companion)
 
-        roots = np.roots(poly_tmp)
+    real = np.real(all_roots)
+    mask = (np.abs(np.imag(all_roots)) < 1e-9) & (real > 0)
+    if max_real_root is not None:
+        mask &= real < max_real_root
 
-        mask = (np.abs(np.imag(roots)) < 1e-9) & (np.real(roots) > 0)
-        if max_real_root is not None:
-            mask &= np.real(roots) < max_real_root
-
-        real_pos = np.real(roots[mask])
-
-        if real_pos.size == 1:
-            result[j] = real_pos[0]
-        elif real_pos.size > 1 and pick_min_on_multiple:
-            result[j] = np.min(real_pos)
-
-    return result
+    count = mask.sum(axis=1)
+    smallest = np.where(mask, real, np.inf).min(axis=1, initial=np.inf)
+    keep = (count == 1) | ((count > 1) & pick_min_on_multiple)
+    return np.where(keep, smallest, np.nan)
 
 
 def omni3d2pixel(
@@ -856,6 +860,12 @@ def reprojectpoints_adv(
     return np.asarray(err), np.asarray(stderr), MSE
 
 
+def _matlab_colon(start: float, step: float, stop: float) -> np.ndarray:
+    """MATLAB's ``start:step:stop`` (inclusive end, with its rounding slack)."""
+    n = int(np.floor((stop - start) / step + 1e-10)) + 1
+    return start + step * np.arange(n)
+
+
 def findcenter(
     ocam_model: OCamModel,
     Xt: np.ndarray,
@@ -866,10 +876,11 @@ def findcenter(
     ima_proc: Sequence[int],
 ) -> Tuple[float, float, np.ndarray, np.ndarray]:
     """
-    Original MATLAB-style exhaustive center search.
+    OCamCalib's center search: nine rounds of a shrinking 6 x 6 grid.
 
     Does NOT mutate ``ocam_model`` -- returns ``(xc, yc, ss, RRfin)`` for
-    the caller to commit (see findcenter_fast's docstring for why).
+    the caller (Calibrator.cal_fromcorners) to commit, so one place owns the
+    model's state.
     """
     print("\nComputing center coordinates.\n")
 
@@ -896,8 +907,8 @@ def findcenter(
     print("Iteration ", end="", flush=True)
 
     for glc in range(1, 10):
-        xs = np.linspace(xregstart, xregstop + 1.0 / xceil, xceil + 2)
-        ys = np.linspace(yregstart, yregstop + 1.0 / yceil, yceil + 2)
+        xs = _matlab_colon(xregstart, (xregstop - xregstart) / xceil, xregstop + 1.0 / xceil)
+        ys = _matlab_colon(yregstart, (yregstop - yregstart) / yceil, yregstop + 1.0 / yceil)
 
         xreg, yreg = np.meshgrid(xs, ys, indexing="ij")
 
@@ -970,8 +981,7 @@ def findcenter(
 
     ss = np.asarray(ss, dtype=float)
 
-    # Diagnostic-only print; see findcenter_fast's docstring for why this
-    # uses a throwaway copy instead of mutating ocam_model.
+    # Diagnostic-only print, on a throwaway copy of the model.
     reprojectpoints(
         replace(ocam_model, xc=cur_xc, yc=cur_yc, ss=ss),
         RRfin, ima_proc, Xt, Yt, Xp_abs, Yp_abs,
@@ -981,125 +991,6 @@ def findcenter(
     print("yc =", cur_yc)
 
     return cur_xc, cur_yc, ss, RRfin
-
-
-def findcenter_fast(
-    ocam_model: OCamModel,
-    Xt: np.ndarray,
-    Yt: np.ndarray,
-    Xp_abs: np.ndarray,
-    Yp_abs: np.ndarray,
-    taylor_order: int,
-    ima_proc: Sequence[int],
-    iterations: int = 4,
-    grid_size: int = 3,
-    start_radius_fraction: float = 0.20,
-) -> Optional[Tuple[float, float, np.ndarray, np.ndarray]]:
-    """
-    Faster center search.
-
-    The original MATLAB-style findcenter search is accurate but slow because it
-    recalibrates many times. This fast version searches a smaller grid and
-    shrinks the search radius after each pass.
-
-    Does NOT mutate ``ocam_model`` -- returns ``(xc, yc, ss, RRfin)`` for
-    the caller to commit, or None when the search fails (the caller should
-    keep the previous center/extrinsics in that case). Committing model
-    state is the caller's (Calibrator.cal_fromcorners') responsibility
-    alone, so there's one place that owns "what is the model's state right
-    now", not a mutation hidden inside this search.
-    """
-    print("\nComputing center coordinates using FAST search.\n")
-
-    width = ocam_model.width
-    height = ocam_model.height
-
-    best_xc = float(ocam_model.xc)
-    best_yc = float(ocam_model.yc)
-
-    radius_x = height * start_radius_fraction
-    radius_y = width * start_radius_fraction
-
-    best_mse = float("inf")
-    best_RRfin = None
-    best_ss = None
-
-    total_tests = iterations * grid_size * grid_size
-    test_count = 0
-
-    for it in range(1, iterations + 1):
-        xs = np.linspace(best_xc - radius_x, best_xc + radius_x, grid_size)
-        ys = np.linspace(best_yc - radius_y, best_yc + radius_y, grid_size)
-
-        print(f"Fast center iteration {it}/{iterations}...", flush=True)
-
-        for xc in xs:
-            for yc in ys:
-                test_count += 1
-
-                RRfin, ss = calibrate(
-                    Xt,
-                    Yt,
-                    Xp_abs,
-                    Yp_abs,
-                    float(xc),
-                    float(yc),
-                    taylor_order,
-                    ima_proc,
-                )
-
-                if np.isscalar(RRfin) or np.size(RRfin) == 1:
-                    continue
-
-                mse = reprojectpoints_fun(
-                    Xt,
-                    Yt,
-                    Xp_abs,
-                    Yp_abs,
-                    float(xc),
-                    float(yc),
-                    RRfin,
-                    ss,
-                    ima_proc,
-                    width,
-                    height,
-                )
-
-                if not np.isnan(mse) and mse < best_mse:
-                    best_mse = mse
-                    best_xc = float(xc)
-                    best_yc = float(yc)
-                    best_RRfin = RRfin
-                    best_ss = ss
-
-        radius_x *= 0.35
-        radius_y *= 0.35
-
-        print(
-            f"  best center so far: xc={best_xc:.3f}, "
-            f"yc={best_yc:.3f}, MSE={best_mse:.3f} "
-            f"({test_count}/{total_tests} center tests)"
-        )
-
-    if best_RRfin is None or best_ss is None:
-        print("Fast center search failed. Keeping previous center.")
-        return None
-
-    best_ss = np.asarray(best_ss, dtype=float)
-
-    print("\nFast center search complete.")
-    print("xc =", best_xc)
-    print("yc =", best_yc)
-
-    # Diagnostic-only print of reprojection error for the just-found best
-    # center; uses a throwaway copy so this function never mutates the
-    # caller's model (see docstring).
-    reprojectpoints(
-        replace(ocam_model, xc=best_xc, yc=best_yc, ss=best_ss),
-        best_RRfin, ima_proc, Xt, Yt, Xp_abs, Yp_abs,
-    )
-
-    return best_xc, best_yc, best_ss, best_RRfin
 
 
 def recomp_corner_calib(

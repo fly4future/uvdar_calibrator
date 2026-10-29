@@ -77,7 +77,8 @@ The direct analogue of ROS's `MonoCalibrator`. One photo == one "frame":
   OR, because a live stream trivially supplies many near-identical frames and sample count
   alone is not evidence of variety. This — not the bin report — gates readiness.
 - `cal_fromcorners()` assembles `Xt/Yt/Xp_abs/Yp_abs` from the accepted `db` only and runs the
-  OCamCalib solve: initial `calibrate()` → `findcenter_fast()` (or slow `findcenter`) →
+  OCamCalib solve: initial `calibrate()` → `findcenter()` (OCamCalib's 9-round grid search;
+  a coarser "fast" search was removed after it showed ~50% more reprojection error) →
   optional `recomp_corner_calib` → final `calibrate()` + `reprojectpoints()`.
 - `Calibrator.board` is a property: assigning a new `LedGridBoard` rebuilds `Xt`/`Yt` and
   marks a solved model stale. `assemble()` raises a clear error when a sample's point count
@@ -162,7 +163,7 @@ Skew are scored against a target, so they fill by progress instead. Green at ful
 CALIBRATE is driven by `goodenough` (with an explicit confirm-to-override
 when not ready); SAVE/EXPORT by `calibrated`. Diagnostic panels are dev-mode only
 (Ctrl+D). Advanced Settings shows the launch-time `CalibratorConfig` read-only; only the
-mirror, slow-find-center and plots switches are editable.
+target, mirror and plots switches are editable.
 
 The LED-grid row is editable: X/Y counts and pitch are applied
 to the running `Calibrator` on commit (Enter, focus-out, or a spinbox arrow). A count

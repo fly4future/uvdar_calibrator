@@ -209,7 +209,6 @@ class LiveCalibrationApp:
         mirror: bool = False,
         set_mirror_fn=None,
         output_dir: str = ".",
-        slow_find_center: bool = False,
         dev_mode: bool = False,
     ):
         board = calibrator.board
@@ -254,7 +253,6 @@ class LiveCalibrationApp:
         self.spacing_mm = tk.DoubleVar(value=board.spacing_mm)
         self.taylor_order = tk.IntVar(value=config.taylor_order)
         self.output_dir = tk.StringVar(value=output_dir)
-        self.slow_find_center = tk.BooleanVar(value=slow_find_center)
         # Launch-time settings of the already-built Calibrator, shown
         # read-only in the "Advanced Settings..." dialog.
         self.calib_config = config
@@ -355,13 +353,9 @@ class LiveCalibrationApp:
         top.pack(side=tk.TOP, fill=tk.X)
         self._build_source_controls(top)
 
-        # What stays permanently visible: the source row above, and one button
-        # that reports the LED-grid geometry the app will assume. The three
-        # fields behind it (count x count, pitch) are wrong for nobody who uses
-        # the default board, and the two checkboxes that used to sit here
-        # (MATLAB-style slow Find Center, show plots) were pure expert knobs --
-        # all of them now live in the Advanced Settings dialog.
-        # Always shown: the board can be swapped while the stream is running.
+        # One button that reports the LED-grid geometry the app assumes, with
+        # the fields behind it. Always shown: the board can be swapped while
+        # the stream is running.
         opts = ttk.Frame(self.root, padding=(8, 0, 8, 8))
         opts.pack(side=tk.TOP, fill=tk.X)
         self.board_option_widgets = []
@@ -677,7 +671,7 @@ class LiveCalibrationApp:
         fov_radius_frac, sample_threshold, param_ranges, min_db_size,
         max_accepted_samples, save_previews_for_rejected) is shown read-only:
         the running Calibrator can't be reconfigured mid-capture. The target,
-        mirroring, slow Find Center and plots switches stay editable.
+        mirroring and plots switches stay editable.
         """
         cfg = self.calib_config
 
@@ -755,11 +749,6 @@ class LiveCalibrationApp:
         _separator(row)
         row += 1
         _section(row, "Solve")
-        row += 1
-        ttk.Checkbutton(
-            body, text="MATLAB-style slow Find Center (slower, more accurate)",
-            variable=self.slow_find_center,
-        ).grid(row=row, column=0, columnspan=3, sticky="w")
         row += 1
         ttk.Checkbutton(
             body, text="Show diagnostics plots after calibration",
@@ -1400,11 +1389,7 @@ class LiveCalibrationApp:
             self.root.configure(cursor="watch")
             self.root.update_idletasks()
             try:
-                cal.cal_fromcorners(
-                    do_find_center=True,
-                    fast_find_center=not self.slow_find_center.get(),
-                    refine_corners=False,
-                )
+                cal.cal_fromcorners()
             finally:
                 self.root.configure(cursor="")
             self.save_button.configure(state="normal")
@@ -1754,7 +1739,6 @@ def launch_live_gui(
     initial_topic: str = "image",
     camera_id: str = "",
     output_dir: str = ".",
-    slow_find_center: bool = False,
     dev_mode: bool = False,
     mirror: bool = False,
     set_mirror_fn=None,
@@ -1772,7 +1756,6 @@ def launch_live_gui(
         initial_topic=initial_topic,
         camera_id=camera_id,
         output_dir=output_dir,
-        slow_find_center=slow_find_center,
         dev_mode=dev_mode,
         mirror=mirror,
         set_mirror_fn=set_mirror_fn,
