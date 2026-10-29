@@ -143,6 +143,12 @@ Two layers, only the first of which gates anything:
   `coverage_suggestions`, `format_bin_coverage`, `plot_bin_coverage`): a supplementary
   "next images to capture" report driven off accepted samples. It must never gate the
   CALIBRATE button.
+- **The guide** (`next_capture_guide`): one "hold the grid here" target for the box, the
+  graph and the headline text. It returns None exactly when `compute_goodenough` is ready
+  -- never because the bins are full, since bins measure size/skew differently from the
+  readiness ranges and fill earlier. Order: empty frame cell, then the least-covered
+  readiness range (Size: closer; Skew: tilt; X/Y: toward the uncovered edge), then the
+  sparsest cell while only the count is short.
 
 Both layers share one coordinate frame: `get_parameters`/`sample_metric` reduce a view to
 coordinates *relative to the camera's usable region* — the full frame, or the fisheye's

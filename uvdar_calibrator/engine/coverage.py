@@ -701,3 +701,75 @@ def plot_bin_coverage(metrics: List[dict]) -> None:
     plt.title(f"Accepted sample coverage ({len(metrics)} samples)")
     plt.grid(True)
     plt.show()
+
+
+# -----------------------------------------------------------------------------
+# Next-capture guide
+# -----------------------------------------------------------------------------
+
+
+def next_capture_guide(
+    db_params: Sequence[Sequence[float]],
+    metrics: Sequence[dict],
+    param_ranges: Sequence[float] = DEFAULT_PARAM_RANGES,
+    min_db_size: int = DEFAULT_MIN_DB_SIZE,
+) -> Optional[dict]:
+    """
+    Where to hold the grid next: ``{"x", "y", "size", "text"}``, or None once ready.
+
+    ``x``/``y`` are normalized frame coordinates (as in get_parameters),
+    ``size`` the apparent size to aim for (as p_size). Returns None exactly
+    when compute_goodenough says ready, so the guide never disappears while
+    the app still says "Not ready yet" -- the bin report alone can be full
+    while a readiness range is short, because the two measure size and skew
+    differently.
+
+    Priority: an empty part of the frame first (spreads positions), then the
+    least-covered readiness range, then -- when only the sample count is
+    short -- the frame cell with the fewest samples.
+    """
+    goodenough, progress = compute_goodenough(db_params, param_ranges, min_db_size)
+    if goodenough:
+        return None
+    if not db_params:
+        return {"x": 0.5, "y": 0.5, "size": 0.22,
+                "text": "Hold the LED grid in front of the camera"}
+
+    sizes = [p[2] for p in db_params]
+    usual_size = float(np.median(sizes))
+
+    report = compute_bin_coverage(list(metrics))
+    cell = next_target_cell(report)
+    if cell is not None:
+        x, y = cell_center(cell)
+        return {"x": x, "y": y, "size": usual_size,
+                "text": f"Put the grid in the {_cell_phrase(cell)}"}
+
+    short = [(p, name, lo, hi) for (name, lo, hi, p) in progress if p < 1.0]
+    if short:
+        _p, name, lo, hi = min(short)
+        if name == "Size":
+            return {"x": 0.5, "y": 0.5, "size": param_ranges[2] * 1.1,
+                    "text": "Bring the grid closer so it fills more of the frame"}
+        if name == "Skew":
+            return {"x": 0.5, "y": 0.5, "size": usual_size,
+                    "text": "Tilt the grid more, about 45 degrees away from the camera"}
+        low_side = lo > 1.0 - hi
+        if name == "X":
+            return {"x": 0.0 if low_side else 1.0, "y": 0.5, "size": usual_size,
+                    "text": f"Put the grid further {'left' if low_side else 'right'}, "
+                            "at the edge of the frame"}
+        return {"x": 0.5, "y": 0.0 if low_side else 1.0, "size": usual_size,
+                "text": f"Put the grid further {'up' if low_side else 'down'}, "
+                        "at the edge of the frame"}
+
+    # Every range is covered; only the sample count is short.
+    counts = {c: 0 for c in COVERAGE_CELLS}
+    for m in metrics:
+        if m.get("cell") in counts:
+            counts[m["cell"]] += 1
+    sparse = min(COVERAGE_CELLS, key=lambda c: counts[c])
+    x, y = cell_center(sparse)
+    return {"x": x, "y": y, "size": usual_size,
+            "text": f"Add more photos ({len(db_params)} of {min_db_size}), "
+                    f"e.g. in the {_cell_phrase(sparse)}"}

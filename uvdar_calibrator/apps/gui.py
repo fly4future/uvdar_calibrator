@@ -890,21 +890,11 @@ class LiveCalibrationApp:
                 f"{n} photos accepted, all four views covered",
             )
 
-        # One action, chosen by what is actually blocking: a thin database is
-        # fixed by taking more photos, a coverage gap by moving the board. When
-        # both apply, the position advice is the more specific of the two, so
-        # it leads and the count is appended.
-        if axes_short and guide is not None:
-            action = guide["text"] + "."
-            if count_short:
-                action += f" Keep going -- {n} of {min_db_size} photos so far."
-        elif count_short:
-            action = f"Add more photos -- {n} of {min_db_size} so far."
-        elif axes_short:
-            names = ", ".join(axes_short)
-            action = f"Vary the view: the {names} range is still too narrow."
-        else:
-            action = "Add more photos."
+        # The guide names the one thing that is blocking; when a range is
+        # short and the count too, the count is appended.
+        action = (guide["text"] + ".") if guide is not None else "Add more photos."
+        if axes_short and count_short:
+            action += f" Keep going -- {n} of {min_db_size} photos so far."
 
         detail = f"{n} of {min_db_size} photos" if count_short else f"{n} photos"
         for name, _lo, _hi, p in progress:
@@ -941,17 +931,8 @@ class LiveCalibrationApp:
         # samples exist (confirmation dialog in calibrate()).
         self.calibrate_button.configure(state=("normal" if n > 0 else "disabled"))
 
-        metrics = cal.db_metrics()
-        if metrics:
-            suggestions = coverage.coverage_suggestions(coverage.compute_bin_coverage(metrics))
-            if not suggestions:
-                suggestions = ["All coverage bins are represented."]
-        else:
-            suggestions = ["No accepted samples yet."]
-
-        # The position guide used to be the first bullet here, but it is now the
-        # headline action above
-        self._write_text(self.suggestion_box, "\n".join(f"• {s}" for s in suggestions))
+        suggestion = guide["text"] if guide is not None else "Every range is covered."
+        self._write_text(self.suggestion_box, f"• {suggestion}")
 
     def _progress_color(self, p: float) -> str:
         """Return the bar color: red -> yellow by progress, green when complete."""
@@ -1173,55 +1154,23 @@ class LiveCalibrationApp:
         """
         Where to put the board next, as normalized image coordinates.
 
-        The on-image box and the coverage graph both draw from this, so they
-        cannot disagree with the suggestion text. None when nothing needs
-        improving, which is how callers know to draw no guidance.
+        The on-image box, the coverage graph and the headline text all draw
+        from this, so they cannot disagree. None only once the samples are
+        ready (coverage.next_capture_guide).
         """
         cal = self.calibrator
         if cal is None:
             return None
-
-        metrics = cal.db_metrics()
-        report = coverage.compute_bin_coverage(metrics) if metrics else None
-        suggestions = coverage.coverage_suggestions(report) if report else []
-        if not report or not suggestions:
+        guide = coverage.next_capture_guide(
+            cal.db_params(), cal.db_metrics(), cal.param_ranges, cal.min_db_size,
+        )
+        if guide is None:
             return None
-
-        progress_map = {}
-        if cal.db:
-            _goodenough, progress, _r = coverage.compute_goodenough_with_bins(
-                cal.db_params(), metrics, cal.param_ranges, cal.min_db_size,
-            )
-            for name, lo, hi, p in progress:
-                progress_map[str(name).strip().lower()] = (
-                    float(lo), float(hi), float(p)
-                )
-
-        cell = coverage.next_target_cell(report)
-        if cell is not None:
-            x, y = coverage.cell_center(cell)
-        else:
-            # All cells filled: stay put and change angle or distance instead.
-            x = float(np.mean([s.params[0] for s in cal.db]))
-            y = float(np.mean([s.params[1] for s in cal.db]))
-
-        size_info = progress_map.get("size")
-        if size_info is not None and size_info[2] < 1.0:
-            lo, hi, _p = size_info
-            if lo > 0.12 and hi >= 0.22:
-                size = 0.10
-            else:
-                size = 0.34
-        elif cal.db:
-            size = float(np.median([s.params[2] for s in cal.db]))
-        else:
-            size = 0.22
-
         return {
-            "x": max(0.05, min(0.95, x)),
-            "y": max(0.05, min(0.95, y)),
-            "size": max(0.08, min(0.45, size)),
-            "text": suggestions[0],
+            "x": max(0.05, min(0.95, guide["x"])),
+            "y": max(0.05, min(0.95, guide["y"])),
+            "size": max(0.08, min(0.45, guide["size"])),
+            "text": guide["text"],
         }
 
     def _draw_position_guide_on_image(self, preview):
@@ -1250,7 +1199,7 @@ class LiveCalibrationApp:
             cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2, cv2.LINE_AA,
         )
 
-        short_hint = guide["text"].replace("Move LED grid here: ", "")
+        short_hint = guide["text"]
         if len(short_hint) > 46:
             short_hint = short_hint[:43] + "..."
         cv2.putText(

@@ -216,10 +216,40 @@ def test_param_distance_is_range_normalized():
     print("ok: param_distance is range-normalized")
 
 
+
+def test_guide_stays_until_ready():
+    """The guide disappears only when readiness is met, not when the bins fill up."""
+    cells = [coverage.cell_center(c) for c in coverage.COVERAGE_CELLS]
+    size_bins = ["far/small", "medium", "close/large"]
+    metrics, params = [], []
+    for k in range(20):
+        x, y = cells[k % len(cells)]
+        metrics.append(_metric_at(x, y, size_bins[k % 3], "moderately tilted"))
+        # Wide X/Y/Skew, but no sample reaches the Size target (0.3).
+        params.append([x, y, 0.05 + 0.01 * (k % 10), 0.5 * (k % 2)])
+
+    report = coverage.compute_bin_coverage(metrics)
+    assert coverage.coverage_suggestions(report) == [], "the bin report should be full"
+    ready, _ = coverage.compute_goodenough(params)
+    assert not ready, "Size is short, so this must not be ready"
+
+    guide = coverage.next_capture_guide(params, metrics)
+    assert guide is not None, "the guide vanished while not ready"
+    assert "closer" in guide["text"], guide["text"]
+
+    params[0][2] = 0.35  # one close-up reaches the Size target
+    assert coverage.compute_goodenough(params)[0]
+    assert coverage.next_capture_guide(params, metrics) is None
+    print("ok: the guide stays until readiness, then disappears")
+
+
 if __name__ == "__main__":
     test_param_distance_is_range_normalized()
     test_cached_metric_matches_fresh_computation()
     test_db_metrics_tracks_accepted_samples()
     test_goodenough_requires_both_count_and_range()
     test_bins_do_not_gate_readiness()
+    test_suggestion_names_one_empty_cell_then_falls_back()
+    test_every_cell_center_maps_back_to_its_own_cell()
+    test_guide_stays_until_ready()
     print("all checks passed")
