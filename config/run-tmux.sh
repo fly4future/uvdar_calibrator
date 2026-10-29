@@ -9,7 +9,7 @@ cd "$SCRIPT_PATH" || exit
 SESSION_FILE="$SCRIPT_PATH/$CAMERA_TYPE/session.yaml"
 if [[ ! -f "$SESSION_FILE" && -f "$SESSION_FILE.template" ]]; then
   if grep -q "__[A-Z_]*__" "$SESSION_FILE.template"; then
-    echo "ERROR: $SESSION_FILE does not exist yet and its template needs camera-specific values - run docker/calibrate.sh first" >&2
+    echo "ERROR: $SESSION_FILE does not exist yet and its template needs camera-specific values - run the camera wizard first" >&2
     exit 1
   fi
   cp "$SESSION_FILE.template" "$SESSION_FILE"

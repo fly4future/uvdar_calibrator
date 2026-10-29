@@ -3,7 +3,7 @@ libcamera_ros_driver:
   ## |                    compulsory parameters                   #
   ## --------------------------------------------------------------
 
-  camera_name: "REPLACE_WITH_CAMERA_NAME" # set by docker/calibrate.sh from the template; use any unique part of the device-tree path (e.g. i2c@80000)
+  camera_name: "REPLACE_WITH_CAMERA_NAME" # set by the camera wizard from the template; use any unique part of the device-tree path (e.g. i2c@80000)
   camera_id: 0
 
   stream_role: "video" # [raw, still, video, viewfinder]

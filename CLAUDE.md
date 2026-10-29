@@ -55,7 +55,7 @@ uvdar_calibrator/
 └── apps/
     ├── gui.py                 # Tkinter LiveCalibrationApp: live preview, range bars, CALIBRATE/SAVE
     ├── live_node.py            # ROS 2 node + argparse (cameracalibrator console_script)
-    └── camera_wizard.py        # camera detection + config/tmux setup (docker/calibrate.sh)
+    └── camera_wizard.py        # camera detection + config/tmux setup (the Docker entry point)
 ```
 
 ### The engine (`engine/calibrator.Calibrator`)
@@ -207,8 +207,8 @@ projection, which would not straighten lines and so would not serve the check.
 
 ### Camera setup (`apps/camera_wizard.py`)
 
-Backs `docker/calibrate.sh` (which is now only a `python -m` shim with
-`--repo-root`) and carries the logic that used to live in bash there. It finds
+The Docker images' entry point (`python3 -m uvdar_calibrator.apps.camera_wizard`, run from
+the source tree so it finds `config/` on its own). It finds
 the attached camera, fills the templates under `config/<type>/`, and starts
 `config/run-tmux.sh`. The templates remain the **source of truth** for driver
 parameters, FOV/mirroring and everything else that is a property of the rig;

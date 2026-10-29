@@ -18,7 +18,7 @@
 
     #  A secondary selector for the camera by serial number.
     #  Used only when device_user_id is empty.
-    device_serial_number: "REPLACE_WITH_SERIAL" # set by docker/calibrate.sh from the template
+    device_serial_number: "REPLACE_WITH_SERIAL" # set by the camera wizard from the template
 
     #  The CameraInfo URL (Uniform Resource Locator) where the optional intrinsic
     #  camera calibration parameters are stored. This URL string will be parsed

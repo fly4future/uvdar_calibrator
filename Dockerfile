@@ -83,11 +83,12 @@ RUN echo "source /opt/ros/${ROS_DISTRO}/setup.bash" >> /root/.bashrc && \
 # /ros2_ws/src/uvdar_calibrator and rebuilt on every start (only this package,
 # and incrementally, since build/install live in volumes)
 FROM base AS dev
-CMD ["bash", "-c", "colcon build --symlink-install && exec src/uvdar_calibrator/docker/calibrate.sh"]
+CMD ["bash", "-c", "colcon build --symlink-install && cd src/uvdar_calibrator && exec python3 -m uvdar_calibrator.apps.camera_wizard"]
 
 # Production image (default target): the source is baked in and prebuilt
 FROM base
 ARG ROS_DISTRO
 COPY . /ros2_ws/src/uvdar_calibrator
 RUN . /opt/ros/${ROS_DISTRO}/setup.sh && colcon build --symlink-install
-CMD ["/ros2_ws/src/uvdar_calibrator/docker/calibrate.sh"]
+WORKDIR /ros2_ws/src/uvdar_calibrator
+CMD ["python3", "-m", "uvdar_calibrator.apps.camera_wizard"]

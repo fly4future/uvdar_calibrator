@@ -1,6 +1,6 @@
 """Camera setup wizard: find one camera, fill its config, start the session.
 
-Backs ``docker/calibrate.sh`` and is usable standalone::
+The Docker images' entry point; also usable standalone::
 
     python -m uvdar_calibrator.apps.camera_wizard --list
     python -m uvdar_calibrator.apps.camera_wizard --camera basler --device 12345678

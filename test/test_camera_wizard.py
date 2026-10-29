@@ -272,21 +272,20 @@ def test_list_is_a_pure_query():
     print("ok: --list only reports")
 
 
-def test_docker_entry_point_calls_the_wizard():
-    """The Docker entry point must hand off to Python, not reimplement it.
+def test_docker_images_start_the_wizard():
+    """Both Docker images must start the Python wizard, not a script of their own.
 
-    A merge once resolved docker/calibrate.sh in favor of the old 288-line bash
-    wizard: the image stopped detecting cameras and libcamera sessions kept
-    literal __DRIVER_SUFFIX__/__DRIVER_IMAGE_TOPIC__ values, so no images ever
-    reached the GUI. Nothing failed loudly, so pin the hand-off down here.
+    A merge once brought back an old bash wizard as the entry point: the image
+    stopped detecting cameras and libcamera sessions kept literal
+    __DRIVER_SUFFIX__/__DRIVER_IMAGE_TOPIC__ values, so no images ever reached
+    the GUI. Nothing failed loudly, so pin the hand-off down here.
     """
-    script = (_REPO_ROOT / "docker" / "calibrate.sh").read_text(encoding="utf-8")
-    assert "-m uvdar_calibrator.apps.camera_wizard" in script
-    assert "--repo-root" in script
-    assert "select CAMERA_TYPE" not in script
-    assert "fill_session" not in script
-    assert len(script.splitlines()) < 40, len(script.splitlines())
-    print("ok: docker entry point delegates to the wizard")
+    dockerfile = (_REPO_ROOT / "Dockerfile").read_text(encoding="utf-8")
+    cmds = [line for line in dockerfile.splitlines() if line.startswith("CMD ")]
+    assert len(cmds) == 2, cmds
+    for cmd in cmds:
+        assert "uvdar_calibrator.apps.camera_wizard" in cmd, cmd
+    print("ok: both docker images start the wizard")
 
 
 if __name__ == "__main__":
@@ -297,5 +296,5 @@ if __name__ == "__main__":
     test_generated_configs_match_the_templates()
     test_main_hands_off_and_refuses_ambiguity()
     test_list_is_a_pure_query()
-    test_docker_entry_point_calls_the_wizard()
+    test_docker_images_start_the_wizard()
     print("all checks passed")

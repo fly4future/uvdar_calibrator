@@ -1,6 +1,6 @@
 image_width: 1280
 image_height: 800
-camera_name: REPLACE_WITH_CAMERA_NAME # set by docker/calibrate.sh from the template; must match camera_custom_config.yaml
+camera_name: REPLACE_WITH_CAMERA_NAME # set by the camera wizard from the template; must match camera_custom_config.yaml
 camera_matrix:
   rows: 3
   cols: 3
