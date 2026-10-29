@@ -216,7 +216,6 @@ def test_param_distance_is_range_normalized():
     print("ok: param_distance is range-normalized")
 
 
-
 def test_guide_stays_until_ready():
     """The guide disappears only when readiness is met, not when the bins fill up."""
     cells = [coverage.cell_center(c) for c in coverage.COVERAGE_CELLS]

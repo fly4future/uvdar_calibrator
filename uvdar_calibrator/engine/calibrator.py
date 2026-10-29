@@ -61,6 +61,7 @@ class FrameResult:
     reason: str                                # human-readable feedback line
     params: Optional[List[float]] = None       # [p_x, p_y, p_size, skew] if detected
     similar_to: Optional[int] = None           # 1-based index of nearest db sample if rejected
+    sample_number: Optional[int] = None        # 1-based db index if accepted
     corners: Optional[np.ndarray] = None       # detected points [row, col] if detected
     progress: List[Tuple[str, float, float, float]] = field(default_factory=list)
     goodenough: bool = False
@@ -99,31 +100,6 @@ class CalibratorConfig:
     # a real default. Unrelated to min_db_size, which is a *readiness*
     # threshold, not a retention limit.
     max_accepted_samples: Optional[int] = None
-
-    @classmethod
-    def from_calibrator(cls, calibrator: Calibrator) -> CalibratorConfig:
-        """
-        Reconstruct the config a live Calibrator was built with, by reading
-        its instance attributes back.
-
-        For callers that need a CalibratorConfig reflecting an
-        already-running Calibrator's actual settings (e.g. the live GUI,
-        which seeds its own launch-time-only config from the Calibrator
-        live_node.py already built) rather than defaults -- listing each
-        field individually at the call site is exactly the kind of
-        duplication CalibratorConfig itself exists to avoid.
-        """
-        return cls(
-            taylor_order=calibrator.taylor_order,
-            pattern=calibrator.pattern,
-            preview_dir=str(calibrator.preview_dir) if calibrator.preview_dir else None,
-            sample_threshold=calibrator.sample_threshold,
-            param_ranges=calibrator.param_ranges,
-            min_db_size=calibrator.min_db_size,
-            save_previews_for_rejected=calibrator.save_previews_for_rejected,
-            fov_radius_frac=calibrator.fov_radius_frac,
-            max_accepted_samples=calibrator.max_accepted_samples,
-        )
 
 
 class Calibrator:
@@ -325,12 +301,13 @@ class Calibrator:
             accepted=True,
             params=params,
             corners=corners,
+            sample_number=len(self.db),
             reason=f"{name}: added as sample {len(self.db)}, p=[{p_str}]",
         )
 
     def _result(
         self, image_path, detected, accepted, reason,
-        params=None, similar_to=None, corners=None,
+        params=None, similar_to=None, corners=None, sample_number=None,
     ) -> FrameResult:
         self.goodenough, progress = coverage.compute_goodenough(
             self.db_params(), self.param_ranges, self.min_db_size
@@ -343,6 +320,7 @@ class Calibrator:
             params=params,
             similar_to=similar_to,
             corners=corners,
+            sample_number=sample_number,
             progress=progress,
             goodenough=self.goodenough,
         )

@@ -72,10 +72,8 @@ def _add_sample(calibrator, board):
 def test_fields_are_visible_and_editable_in_live():
     root, app, calibrator, _consumer = _build_app(LedGridBoard(5, 3, 25.0))
     try:
-        assert app.board_button.winfo_manager() == "pack", (
-            "the LED-grid row is hidden without dev mode"
-        )
         for widget in app.board_option_widgets:
+            assert widget.winfo_manager() == "pack", "the LED-grid fields are hidden"
             assert str(widget.cget("state")) != "disabled", (
                 "live board fields must be editable"
             )
@@ -131,7 +129,8 @@ def test_spacing_change_keeps_samples_but_invalidates_the_model():
         assert calibrator.calibrated is False, "the old-scale model stayed valid"
         assert calibrator.Xt[-1, 0] == 6 * 60.0, "the world scale did not follow the pitch"
         assert calibrator.Yt[-1, 0] == 4 * 60.0
-        assert str(app.save_button.cget("state")) == "disabled"
+        assert str(app.export_button.cget("state")) == "disabled"
+        assert str(app.plots_button.cget("state")) == "disabled"
         assert "samples kept" in app.bottom_status.cget("text")
     finally:
         root.destroy()

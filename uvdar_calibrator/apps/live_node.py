@@ -38,7 +38,7 @@ Run it the same way as upstream's cameracalibrator::
 
 There is deliberately no ``SetCameraInfo`` upload here:
 ``sensor_msgs/CameraInfo`` distortion models have no slot for the
-OCamCalib polynomial, so results are persisted locally via SAVE/EXPORT
+OCamCalib polynomial, so results are persisted locally via Export calibration
 (``calib_results.txt``) instead.
 """
 
@@ -399,7 +399,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
                    help=(
                        "Calibration target: the UV LED grid, or a printed "
                        "checkerboard whose inner corners match the grid size. "
-                       "Can be switched in the GUI's Advanced Settings. "
+                       "Can be switched in the GUI. "
                        f"Default: {PATTERNS[0]}."
                    ))
     p.add_argument("--taylor_order", type=int, default=4,
@@ -441,19 +441,13 @@ def _build_arg_parser() -> argparse.ArgumentParser:
                        "and sample browsing) would otherwise grow unbounded over a "
                        f"long-running capture. Default: {DEFAULT_MAX_ACCEPTED_SAMPLES}."
                    ))
-    p.add_argument("--dev", action="store_true",
-                   help=(
-                       "In the GUI, show the diagnostic panels that are hidden "
-                       "by default (range bars, coverage graph, sample log, "
-                       "settings). Also toggle in-app with Ctrl+D."
-                   ))
-    p.add_argument("--mirror", action="store_true",
+    p.add_argument("--mirror", action=argparse.BooleanOptionalAction, default=True,
                    help=(
                        "Mirror (flip left-right) the incoming frames before they "
-                       "are shown and detected, for cameras whose driver delivers "
-                       "a mirrored image. The model that comes out describes the "
-                       "mirrored view. Can be switched at runtime from the GUI's "
-                       "Advanced Settings. Default: off."
+                       "are shown and detected, for cameras whose driver delivers a "
+                       "mirrored image. The model that comes out describes the "
+                       "mirrored view. Can be switched at runtime in the GUI. "
+                       "Default: on (--no-mirror turns it off)."
                    ))
     add_sample_selection_args(p)
     return p
@@ -513,7 +507,6 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
             initial_topic=node.resolved_topic,
             camera_id=args.camera_id,
             output_dir=args.output_dir,
-            dev_mode=args.dev,
             mirror=args.mirror,
             set_mirror_fn=node.set_mirror,
         )

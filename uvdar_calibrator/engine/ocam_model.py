@@ -816,50 +816,6 @@ def reprojectPoints_fun(
 reprojectpoints_fun = reprojectPoints_fun
 
 
-def reprojectpoints_adv(
-    ocam_model: OCamModel,
-    RRfin: np.ndarray,
-    ima_proc: Sequence[int],
-    Xp_abs: np.ndarray,
-    Yp_abs: np.ndarray,
-    M: np.ndarray,
-):
-    M = np.asarray(M, dtype=float).copy()
-
-    M[:, 2] = 1.0
-
-    err = []
-    stderr = []
-    MSE = 0.0
-
-    for i in ima_proc:
-        k = idx(i)
-
-        Mc = RRfin[:, :, k] @ M.T
-
-        m = world2cam(Mc, ocam_model)
-
-        xp = m[0, :]
-        yp = m[1, :]
-
-        sqerr = (Xp_abs[:, 0, k] - xp) ** 2 + (Yp_abs[:, 0, k] - yp) ** 2
-
-        err.append(float(np.nanmean(np.sqrt(sqerr))))
-        stderr.append(float(np.nanstd(np.sqrt(sqerr))))
-
-        MSE += float(np.nansum(sqerr))
-
-    print("\nAverage reprojection error computed for each chessboard [pixels]:\n")
-
-    for e, s in zip(err, stderr):
-        print(f" {e:3.2f} ± {s:3.2f}")
-
-    print(f"\nAverage error [pixels]\n\n {np.nanmean(err):f}")
-    print(f"\nSum of squared errors\n\n {MSE:f}")
-
-    return np.asarray(err), np.asarray(stderr), MSE
-
-
 def _matlab_colon(start: float, step: float, stop: float) -> np.ndarray:
     """MATLAB's ``start:step:stop`` (inclusive end, with its rounding slack)."""
     n = int(np.floor((stop - start) / step + 1e-10)) + 1

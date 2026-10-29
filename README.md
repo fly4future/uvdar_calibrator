@@ -33,7 +33,7 @@ Then:
    next, and the panel on the right says what is still missing. Cover the whole image:
    centre, edges and corners, near and far, tilted in different directions.
 2. When it says **Ready to calibrate**, press **CALIBRATE**.
-3. Press **SAVE / EXPORT** and confirm the save dialog. The file goes to
+3. Press **Export calibration** and confirm the save dialog. The file goes to
    `calibration_output/` as `calib_results_<camera>.txt`.
 
 Closing the window stops the container.
@@ -90,5 +90,5 @@ flowchart LR
     E --> F{"X / Y / Size / Skew<br/>coverage complete?"}
     F -->|"no"| A
     F -->|"yes"| G["CALIBRATE"]
-    G --> H["SAVE / EXPORT<br/>calib_results.txt"]
+    G --> H["Export calibration<br/>calib_results.txt"]
 ```

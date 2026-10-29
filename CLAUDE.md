@@ -96,7 +96,7 @@ target spans — not raw parameter units,
 camera_calibration defaults but have been retuned for this smaller/farther-captured UV grid —
 see the note at their definition. They are overridable per-run through `CalibratorConfig`, the
 `--sample_threshold` / `--param_ranges` / `--min_db_size` flags of the live node
-(the GUI's Advanced Settings dialog only displays them).
+(the GUI does not show them).
 
 ### The solver (`engine/ocam_model.py`)
 
@@ -117,7 +117,7 @@ model" invariant if touching this function.
 ### Detection (`engine/detection.py`)
 
 `get_corners(img, board, pattern)` returns `(ok, corners, board)` like ROS. `pattern`
-(`CalibratorConfig.pattern`, `--pattern`, switchable in Advanced Settings) selects one
+(`CalibratorConfig.pattern`, `--pattern`, the GUI's Target toggle) selects one
 detector; there is no fallback chain:
 
 - `"led"` (default): OpenCV `findCirclesGrid` (symmetric grid, both orientations) with a
@@ -167,9 +167,11 @@ accept/reject. The four X/Y/Size/Skew range bars
 mirror ROS's `redraw_monocular` bars. X/Y show the span the accepted samples cover; Size and
 Skew are scored against a target, so they fill by progress instead. Green at full progress.
 CALIBRATE is driven by `goodenough` (with an explicit confirm-to-override
-when not ready); SAVE/EXPORT by `calibrated`. Diagnostic panels are dev-mode only
-(Ctrl+D). Advanced Settings shows the launch-time `CalibratorConfig` read-only; only the
-target, mirror and plots switches are editable.
+when not ready); Show plots and Export calibration by `calibrated`. Everything is on the
+main window -- grid size/spacing, Target and Mirror image in the second row, all applied
+to the running session; there is no settings dialog or hidden dev mode. The sample log is
+built from each `FrameResult` (not its `reason` string) and collapses repeated "no grid" /
+"too similar" lines into one counted line, since a live stream produces one per frame.
 
 The LED-grid row is editable: X/Y counts and pitch are applied
 to the running `Calibrator` on commit (Enter, focus-out, or a spinbox arrow). A count
@@ -247,7 +249,7 @@ configs `config/<camera>/`; don't confuse the two directories.
   pairing. `Calibrator.cal_fromcorners`'s initial guess is correctly `xc=height/2.0,
   yc=width/2.0`, not the other way around; this has been verified by tracing the pairing through
   every solver function that reads it.
-- **Mirroring the live input** (`--mirror`, or the live GUI's "Mirror incoming frames" switch)
+- **Mirroring the live input** (on by default: `--mirror`/`--no-mirror`, or the GUI's "Mirror image" switch)
   flips the frame in `live_node.mkgray`, *before* it reaches either queue, so the preview, the
   detection, the coverage advice and the saved model all describe the same (mirrored) view.
   The detector labels the grid in image order, so a mirrored frame reads the board with the

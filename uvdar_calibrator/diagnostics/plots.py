@@ -25,7 +25,6 @@ from ..engine.ocam_model import (
     idx,
     OCamModel,
     omni3d2pixel,
-    reprojectpoints_adv,
     world2cam,
 )
 
@@ -337,43 +336,6 @@ def draw_projection_function(fig: Figure, ocam_model: OCamModel) -> None:
     ax2.set_xlabel("Distance 'rho' from the image center in pixels")
     ax2.set_ylabel("Degrees")
     ax2.set_title("Angle of optical ray as a function of distance from circle center (pixels)")
-
-
-def print_calib_summary(
-    ocam_model: OCamModel,
-    RRfin: np.ndarray,
-    ima_proc: Sequence[int],
-    Xt: np.ndarray,
-    Yt: np.ndarray,
-    Xp_abs: np.ndarray,
-    Yp_abs: np.ndarray,
-) -> None:
-    """Print the per-image reprojection table and the fitted model, no plots."""
-    M = np.column_stack(
-        [
-            np.asarray(Xt).ravel(),
-            np.asarray(Yt).ravel(),
-            np.zeros(np.asarray(Xt).size),
-        ]
-    )
-
-    reprojectpoints_adv(
-        ocam_model,
-        RRfin,
-        ima_proc,
-        Xp_abs,
-        Yp_abs,
-        M,
-    )
-
-    print("ss =")
-    print(ocam_model.ss)
-
-    print("xc =")
-    print(ocam_model.xc)
-
-    print("yc =")
-    print(ocam_model.yc)
 
 
 def draw_extrinsics(

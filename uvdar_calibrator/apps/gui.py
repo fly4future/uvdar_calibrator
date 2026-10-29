@@ -11,7 +11,7 @@ into :class:`~uvdar_calibrator.engine.calibrator.Calibrator` and shows:
 - the supplementary bin-based "next images to capture" hints, driven off
   the accepted samples,
 - CALIBRATE gated by ``calibrator.goodenough`` (with confirm-to-override)
-  and SAVE/EXPORT gated by ``calibrator.calibrated``.
+  and Export gated by ``calibrator.calibrated``.
 """
 
 from __future__ import annotations
@@ -23,6 +23,7 @@ import math
 import queue
 import re
 import time
+from datetime import datetime
 from typing import Optional, Tuple
 
 import numpy as np
@@ -30,7 +31,7 @@ import numpy as np
 from ..engine import coverage
 from ..engine import ocam_model
 from ..engine.board import LedGridBoard
-from ..engine.calibrator import Calibrator, CalibratorConfig
+from ..engine.calibrator import Calibrator
 from ..engine.detection import PATTERN_CHESSBOARD, PATTERN_LED_GRID
 
 try:
@@ -51,6 +52,10 @@ except Exception:  # pragma: no cover - headless environments
 #: Keep at most this many lines in the sample log (relevant for live mode,
 #: where rejected-frame lines keep arriving for as long as capture runs).
 MAX_LOG_LINES = 1000
+
+#: Sample-log line kinds that repeat for every frame and collapse into one
+#: counted line instead of flooding the log.
+_COLLAPSING_LOG_KINDS = ("rejected", "missed")
 
 
 def _sanitize_filename_part(text: str) -> str:
@@ -209,10 +214,8 @@ class LiveCalibrationApp:
         mirror: bool = False,
         set_mirror_fn=None,
         output_dir: str = ".",
-        dev_mode: bool = False,
     ):
         board = calibrator.board
-        config = CalibratorConfig.from_calibrator(calibrator)
 
         self.result_queue = result_queue
         self.preview_queue = preview_queue
@@ -221,7 +224,7 @@ class LiveCalibrationApp:
         self.topic = tk.StringVar(value=initial_topic)
         self._subscribed_topic = initial_topic
         # Identifier from the driver config (wizard's --camera_id); used for
-        # the suggested SAVE filename.
+        # the suggested export filename.
         self.camera_id = camera_id or ""
         self.n_rejected = 0
         self.n_failed = 0
@@ -237,7 +240,7 @@ class LiveCalibrationApp:
         self.theme = apply_theme(self.root)
 
         # Fit the window to the screen's work area instead of forcing a fixed
-        # 1180x980 that overran smaller displays (pushing the CALIBRATE/SAVE
+        # 1180x980 that overran smaller displays (pushing the CALIBRATE/Export
         # buttons off the bottom). Bounded by the design size on large screens,
         # by the available screen on small ones.
         screen_w = max(100, root.winfo_screenwidth())
@@ -251,16 +254,10 @@ class LiveCalibrationApp:
         self.n_sq_x = tk.IntVar(value=board.n_sq_x)
         self.n_sq_y = tk.IntVar(value=board.n_sq_y)
         self.spacing_mm = tk.DoubleVar(value=board.spacing_mm)
-        self.taylor_order = tk.IntVar(value=config.taylor_order)
         self.output_dir = tk.StringVar(value=output_dir)
-        # Launch-time settings of the already-built Calibrator, shown
-        # read-only in the "Advanced Settings..." dialog.
-        self.calib_config = config
-        self.show_plots = tk.BooleanVar(value=False)
         self.forward_view_var = tk.BooleanVar(value=False)
         # Flip the incoming frames left-right. Seeded from --mirror and
-        # switchable at runtime in the Advanced Settings dialog; the live node
-        # owns the actual flip.
+        # switchable at runtime; the live node owns the actual flip.
         self.mirror = tk.BooleanVar(value=bool(mirror))
         # Which target the detector looks for; switchable at runtime.
         self.pattern = tk.StringVar(value=calibrator.pattern)
@@ -271,13 +268,8 @@ class LiveCalibrationApp:
             value=ocam_model.DEFAULT_FORWARD_VIEW_HFOV_DEG
         )
 
-        # Dev mode hides everything that is diagnostic rather than actionable:
-        # the bars keep whatever they were drawing and the log keeps its history.
-        self.dev_mode = bool(dev_mode)
-        # (parent, [(widget, pack_kwargs, dev_only), ...]) in display order.
-        # Toggling re-packs each row from scratch in this order, because pack()
-        # appends to a parent's stacking order.
-        self._layout_rows = []
+        # (kind, text, count) of the newest log line, for collapsing repeats.
+        self._last_log = None
 
         self.calibrator = calibrator
         self.current_sample_index = 0
@@ -297,52 +289,10 @@ class LiveCalibrationApp:
         self._build_widgets()
         self.root.bind("<Left>", lambda _e: self.prev_sample())
         self.root.bind("<Right>", lambda _e: self.next_sample())
-        self.root.bind("<Control-d>", lambda _e: self._toggle_dev_mode())
-        self.root.bind("<Control-D>", lambda _e: self._toggle_dev_mode())
 
         self._refresh_capture_button()
         self._set_status(f"Live capture running on topic '{initial_topic}'.")
-        self._update_board_button()
         self.root.after(self.POLL_MS, self._poll_queue)
-
-    # ------------------------------------------------------------------
-    # Dev mode
-    # ------------------------------------------------------------------
-
-    def _register_row(self, parent, items) -> None:
-        """
-        Record one parent's child order, then pack it.
-
-        ``items`` is ``[(widget, pack_kwargs, dev_only), ...]`` in the order the
-        widgets should appear. Marking a widget dev-only hides it unless
-        ``self.dev_mode``; see ``_layout_rows``.
-        """
-        self._layout_rows.append((parent, items))
-        self._pack_row(parent, items)
-
-    def _pack_row(self, parent, items) -> None:
-        for widget, pack_kwargs, dev_only in items:
-            widget.pack_forget()
-            if dev_only and not self.dev_mode:
-                continue
-            widget.pack(**pack_kwargs)
-
-    def _apply_dev_mode(self) -> None:
-        for parent, items in self._layout_rows:
-            self._pack_row(parent, items)
-        self.dev_button.configure(
-            text=("Hide dev" if self.dev_mode else "Dev"),
-            style=("Dev.TButton" if self.dev_mode else "TButton"),
-        )
-        self._update_progress_panel()
-
-    def _toggle_dev_mode(self) -> None:
-        self.dev_mode = not self.dev_mode
-        self._apply_dev_mode()
-        self._set_status(
-            f"Dev mode {'on' if self.dev_mode else 'off'} "
-            f"(Ctrl+D toggles)."
-        )
 
     # ------------------------------------------------------------------
     # Widgets
@@ -353,46 +303,25 @@ class LiveCalibrationApp:
         top.pack(side=tk.TOP, fill=tk.X)
         self._build_source_controls(top)
 
-        # One button that reports the LED-grid geometry the app assumes, with
-        # the fields behind it. Always shown: the board can be swapped while
-        # the stream is running.
+        # Second row, always visible: what to detect and how the frames come
+        # in. All of it applies to the running session.
         opts = ttk.Frame(self.root, padding=(8, 0, 8, 8))
         opts.pack(side=tk.TOP, fill=tk.X)
         self.board_option_widgets = []
 
-        self._board_panel_visible = False
-        self.board_button = ttk.Button(
-            opts, text="", command=self._toggle_board_panel
-        )
-        self.board_button.pack(side=tk.LEFT)
-        ttk.Button(
-            opts, text="Advanced Settings...", command=self._open_advanced_settings
-        ).pack(side=tk.RIGHT)
-
-        self.board_panel = ttk.Frame(opts, padding=(10, 0, 0, 0))
-        ttk.Label(self.board_panel, text="Grid squares X:").pack(side=tk.LEFT)
-        w = ttk.Spinbox(self.board_panel, from_=1, to=30, textvariable=self.n_sq_x, width=5)
+        ttk.Label(opts, text="Grid squares X:").pack(side=tk.LEFT)
+        w = ttk.Spinbox(opts, from_=1, to=30, textvariable=self.n_sq_x, width=4)
         w.pack(side=tk.LEFT, padx=4)
         self.board_option_widgets.append(w)
-        ttk.Label(self.board_panel, text="Y:").pack(side=tk.LEFT)
-        w = ttk.Spinbox(self.board_panel, from_=1, to=30, textvariable=self.n_sq_y, width=5)
+        ttk.Label(opts, text="Y:").pack(side=tk.LEFT)
+        w = ttk.Spinbox(opts, from_=1, to=30, textvariable=self.n_sq_y, width=4)
         w.pack(side=tk.LEFT, padx=4)
         self.board_option_widgets.append(w)
-        ttk.Label(self.board_panel, text="Spacing mm:").pack(side=tk.LEFT, padx=(12, 0))
-        w = ttk.Entry(self.board_panel, textvariable=self.spacing_mm, width=7)
+        ttk.Label(opts, text="Spacing:").pack(side=tk.LEFT, padx=(8, 0))
+        w = ttk.Entry(opts, textvariable=self.spacing_mm, width=6)
         w.pack(side=tk.LEFT, padx=4)
         self.board_option_widgets.append(w)
-
-        ttk.Label(
-            self.board_panel, text="applies immediately",
-            font=self.theme.font(8), foreground=self.theme.muted,
-        ).pack(side=tk.LEFT, padx=(12, 0))
-
-        # The button doubles as the readout of the current geometry, so a
-        # collapsed panel still tells the user what the app is assuming.
-        for var in (self.n_sq_x, self.n_sq_y, self.spacing_mm):
-            var.trace_add("write", lambda *_a: self._update_board_button())
-        self._update_board_button()
+        ttk.Label(opts, text="mm").pack(side=tk.LEFT)
 
         # Commit on Enter, focus-out or a spinbox arrow -- not on every
         # keystroke of a half-typed number.
@@ -403,6 +332,20 @@ class LiveCalibrationApp:
             if isinstance(widget, ttk.Spinbox):
                 widget.configure(command=self._on_board_fields_committed)
 
+        ttk.Separator(opts, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=12)
+        ttk.Label(opts, text="Target:").pack(side=tk.LEFT)
+        for value, text in ((PATTERN_LED_GRID, "UV LEDs"), (PATTERN_CHESSBOARD, "Checkerboard")):
+            ttk.Radiobutton(
+                opts, text=text, value=value, variable=self.pattern,
+                command=self._on_pattern_changed,
+            ).pack(side=tk.LEFT, padx=(6, 0))
+
+        ttk.Separator(opts, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=12)
+        ttk.Checkbutton(
+            opts, text="Mirror image", variable=self.mirror,
+            command=self._on_mirror_toggled,
+        ).pack(side=tk.LEFT)
+
         main = ttk.Frame(self.root, padding=8)
         main.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
 
@@ -410,22 +353,25 @@ class LiveCalibrationApp:
         left.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
         # The right sidebar's fixed-height content (range bars, coverage
-        # graph, log, suggestions) can exceed a short screen. It is therefore
-        # wrapped in a scrollable region, while the CALIBRATE / SAVE-EXPORT
-        # button row is pinned below it (outside the scroll region) so the
-        # buttons are ALWAYS visible regardless of window height.
+        # graph, log) can exceed a short screen. It is therefore wrapped in a
+        # scrollable region, while the action buttons are pinned below it
+        # (outside the scroll region) so they are ALWAYS visible regardless
+        # of window height.
         right = ttk.Frame(main, width=340)
         right.pack(side=tk.RIGHT, fill=tk.BOTH, padx=(10, 0))
         right.pack_propagate(False)
 
+        # Packed first so the scroll region above it never takes its space.
+        actions = ttk.Frame(right)
+        actions.pack(side=tk.BOTTOM, fill=tk.X, pady=(8, 0))
+
+        self.right_scrollbar = ttk.Scrollbar(right, orient="vertical")
+        self.right_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         self.right_scroll = tk.Canvas(
             right, highlightthickness=0, background=self.theme.bg
         )
-        self.right_scroll.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
-        self.right_scrollbar = ttk.Scrollbar(
-            right, orient="vertical", command=self.right_scroll.yview
-        )
-        self.right_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self.right_scroll.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self.right_scrollbar.configure(command=self.right_scroll.yview)
         self.right_scroll.configure(yscrollcommand=self.right_scrollbar.set)
         self._right_scroll_frame = ttk.Frame(self.right_scroll)
         self._right_scroll_window = self.right_scroll.create_window(
@@ -481,18 +427,13 @@ class LiveCalibrationApp:
         )
         self.forward_view_fov_label = ttk.Label(nav, text="FOV")
         self.image_label = ttk.Label(nav, text="No accepted sample loaded")
-        # Only the "which sample am I looking at" caption is always needed.
-        # Browsing, deleting a bad sample and the forward-view check are all
-        # inspection tools, so they live in dev mode.
-        self._register_row(nav, [
-            (prev_button, {"side": tk.LEFT}, True),
-            (next_button, {"side": tk.LEFT, "padx": 4}, True),
-            (self.delete_button, {"side": tk.LEFT, "padx": 4}, True),
-            (self.image_label, {"side": tk.LEFT, "padx": 12}, False),
-            (self.forward_view_fov_label, {"side": tk.RIGHT}, True),
-            (self.forward_view_fov_box, {"side": tk.RIGHT, "padx": (0, 8)}, True),
-            (self.forward_view_toggle, {"side": tk.RIGHT}, True),
-        ])
+        prev_button.pack(side=tk.LEFT)
+        next_button.pack(side=tk.LEFT, padx=4)
+        self.delete_button.pack(side=tk.LEFT, padx=4)
+        self.image_label.pack(side=tk.LEFT, padx=12)
+        self.forward_view_fov_label.pack(side=tk.RIGHT)
+        self.forward_view_fov_box.pack(side=tk.RIGHT, padx=(0, 8))
+        self.forward_view_toggle.pack(side=tk.RIGHT)
 
         sidebar = self._right_scroll_frame
 
@@ -524,48 +465,41 @@ class LiveCalibrationApp:
         log_title = ttk.Label(
             sidebar, text="Sample log", font=self.theme.font(10, "bold")
         )
-        self.log_box = self._text_card(sidebar, height=10)
-        suggestion_title = ttk.Label(
-            sidebar, text="Next image to capture", font=self.theme.font(10, "bold")
-        )
-        self.suggestion_box = self._text_card(sidebar, height=4)
 
-        # The three readiness lines are the whole of the minimal sidebar.
-        # (_text_card packs the card frame and returns the Text, so
-        # .master is what has to be hidden.)
-        self._register_row(sidebar, [
-            (progress_title, {"anchor": "center"}, True),
-            (self.readiness_verdict, {"anchor": "center", "pady": (8, 2)}, False),
-            (self.readiness_action, {"anchor": "center"}, False),
-            (self.readiness_detail, {"anchor": "center", "pady": (4, 10)}, False),
-            (self.bar_canvas, {"anchor": "center", "pady": (0, 10)}, True),
-            (coverage_title, {"anchor": "center"}, True),
-            (self.coverage_canvas, {"anchor": "center", "pady": (4, 10)}, True),
-            (log_title, {"anchor": "w"}, True),
-            (self.log_box.master, {"anchor": "w", "fill": "x", "pady": (4, 10)}, True),
-            (suggestion_title, {"anchor": "w"}, True),
-            (self.suggestion_box.master,
-             {"anchor": "w", "fill": "x", "pady": (4, 10)}, True),
-        ])
+        progress_title.pack(anchor="center")
+        self.readiness_verdict.pack(anchor="center", pady=(8, 2))
+        self.readiness_action.pack(anchor="center")
+        self.readiness_detail.pack(anchor="center", pady=(4, 10))
+        self.bar_canvas.pack(anchor="center", pady=(0, 10))
+        coverage_title.pack(anchor="center")
+        self.coverage_canvas.pack(anchor="center", pady=(4, 10))
+        log_title.pack(anchor="w")
+        self.log_box = self._text_card(sidebar, height=10)
+        self.log_box.tag_configure("time", foreground=self.theme.muted)
+        self.log_box.tag_configure("accepted", foreground=self.theme.good)
+        self.log_box.tag_configure("rejected", foreground=self.theme.muted)
+        self.log_box.tag_configure("missed", foreground=self.theme.muted)
+        self.log_box.tag_configure("event", foreground=self.theme.bad)
         self._draw_bars([])
         self._draw_coverage_graph()
 
-        actions = ttk.Frame(right)
-        actions.pack(side=tk.BOTTOM, fill=tk.X)
         self.calibrate_button = ttk.Button(
             actions, text="CALIBRATE", command=self.calibrate, state="disabled"
         )
-        self.calibrate_button.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 4))
-        self.save_button = ttk.Button(
-            actions, text="SAVE / EXPORT", command=self.save_and_export, state="disabled"
+        self.calibrate_button.pack(side=tk.TOP, fill=tk.X, pady=(0, 6))
+        self.plots_button = ttk.Button(
+            actions, text="Show plots", command=self.show_plots, state="disabled"
         )
-        self.save_button.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(4, 0))
+        self.plots_button.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 4))
+        self.export_button = ttk.Button(
+            actions, text="Export calibration", command=self.export_calibration,
+            state="disabled",
+        )
+        self.export_button.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(4, 0))
 
         # A hairline plus muted text instead of a sunken groove: the status
         # line is the app's only persistent feedback surface, so it should
-        # read as a quiet strip rather than a second toolbar. The Dev toggle
-        # lives here because it is the one control that must stay reachable in
-        # the minimal layout without adding anything to the main window.
+        # read as a quiet strip rather than a second toolbar.
         footer = ttk.Frame(self.root)
         footer.pack(side=tk.BOTTOM, fill=tk.X)
         ttk.Separator(footer).pack(side=tk.TOP, fill=tk.X)
@@ -573,15 +507,6 @@ class LiveCalibrationApp:
             footer, text="", anchor="w", padding=(10, 4), foreground=self.theme.muted,
         )
         self.bottom_status.pack(side=tk.LEFT, fill=tk.X, expand=True)
-        self.dev_button = ttk.Button(
-            footer,
-            text=("Hide dev" if self.dev_mode else "Dev"),
-            command=self._toggle_dev_mode,
-            width=6,
-            style=("Dev.TButton" if self.dev_mode else "TButton"),
-        )
-        self.dev_button.pack(side=tk.RIGHT, padx=4, pady=2)
-        ttk.Style(self.root).configure("Dev.TButton", foreground=self.theme.good)
 
     def _card_canvas(self, parent, height: int):
         """A white drawing surface that matches the rest of the palette."""
@@ -595,12 +520,12 @@ class LiveCalibrationApp:
         """
         A flat, scrollable read-only text card, already packed.
 
-        The log and the suggestions are plain ``tk.Text``, which by default
-        brings its own 3D border and a white background that clashes with the
-        surrounding cards; styling them here keeps both identical and gives
-        the log a scrollbar it previously lacked. The card *frame* is what
-        gets packed -- returning the Text to pack instead would leave it
-        inside an unmanaged frame, and it would never be displayed.
+        The log is a plain ``tk.Text``, which by default brings its own 3D
+        border and a white background that clashes with the surrounding
+        cards; styling it here matches it to them and gives it a scrollbar.
+        The card *frame* is what gets packed -- returning the Text to pack
+        instead would leave it inside an unmanaged frame, and it would never
+        be displayed.
         """
         card = tk.Frame(parent, background=self.theme.border)
         card.pack(anchor="w", fill=tk.X, pady=pady)
@@ -617,37 +542,6 @@ class LiveCalibrationApp:
         text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         return text
 
-    def _toggle_board_panel(self):
-        """Show/hide the LED-grid fields (grid size, pitch) behind one button."""
-        self._board_panel_visible = not self._board_panel_visible
-        if self._board_panel_visible:
-            self.board_panel.pack(side=tk.LEFT, fill=tk.X, expand=True)
-        else:
-            self.board_panel.pack_forget()
-        self._update_board_button()
-
-    def _update_board_button(self):
-        """
-        Label the toggle with the geometry it represents.
-
-        A bare "Settings" button would leave the user guessing which board the
-        app is assuming; showing "7 x 5, 15 mm" means the default works for
-        everybody and the button only matters to somebody whose board differs.
-        """
-        try:
-            text = (
-                f"LED grid: {self.n_sq_x.get()} x {self.n_sq_y.get()}, "
-                f"{self.spacing_mm.get():g} mm spacing"
-            )
-        except tk.TclError:
-            # Mid-edit in the spinbox ("" or "1e"): keep the old label.
-            return
-        # Wording rather than a triangle glyph: U+25B8/U+25BE are missing from
-        # some of the candidate UI fonts, and a tofu box on the one button that
-        # reveals the settings is worse than no arrow at all.
-        action = "hide" if self._board_panel_visible else "change"
-        self.board_button.configure(text=f"{text}  ({action})")
-
     def _on_mousewheel(self, event):
         # Only scroll when the pointer is over the sidebar's scroll region,
         # so the image canvas (which shows Previous/Next-bound samples) isn't
@@ -662,128 +556,6 @@ class LiveCalibrationApp:
             return
         delta = int(-1 * (event.delta / 120))
         self.right_scroll.yview_scroll(delta, "units")
-
-    def _open_advanced_settings(self):
-        """
-        Dialog for the settings that are not on the main window.
-
-        The Calibrator's launch-time configuration (taylor_order,
-        fov_radius_frac, sample_threshold, param_ranges, min_db_size,
-        max_accepted_samples, save_previews_for_rejected) is shown read-only:
-        the running Calibrator can't be reconfigured mid-capture. The target,
-        mirroring and plots switches stay editable.
-        """
-        cfg = self.calib_config
-
-        dialog = tk.Toplevel(self.root)
-        dialog.title("Advanced Settings")
-        dialog.transient(self.root)
-        dialog.resizable(False, False)
-
-        body = ttk.Frame(dialog, padding=12)
-        body.pack(fill=tk.BOTH, expand=True)
-
-        def _fmt(value):
-            return "" if value is None else str(value)
-
-        def _value_row(row, label, value, hint):
-            ttk.Label(body, text=label).grid(row=row, column=0, sticky="w", pady=3)
-            ttk.Label(body, text=_fmt(value)).grid(row=row, column=1, sticky="w", padx=6)
-            ttk.Label(
-                body, text=hint, font=self.theme.font(8), foreground=self.theme.muted,
-            ).grid(row=row, column=2, sticky="w")
-
-        def _section(row, title):
-            ttk.Label(
-                body, text=title, font=self.theme.font(9, "bold"),
-            ).grid(row=row, column=0, columnspan=3, sticky="w", pady=(0, 4))
-
-        def _separator(row):
-            ttk.Separator(body, orient=tk.HORIZONTAL).grid(
-                row=row, column=0, columnspan=3, sticky="ew", pady=8
-            )
-
-        _section(0, "Calibration model and sample selection (set at launch)")
-        rows = [
-            ("Taylor order:", self.taylor_order.get(),
-             "polynomial degree of the omnidirectional model; 4 is the OCamCalib default"),
-            ("FOV radius fraction:", cfg.fov_radius_frac,
-             "fisheye usable-circle radius, fraction of min(w,h)/2; blank = full frame"),
-            ("Sample threshold:", cfg.sample_threshold,
-             "min distance for a new sample to be accepted, in target spans"),
-            ("Param ranges:",
-             "  ".join(f"{n}: {v}" for n, v in zip(coverage.PARAM_NAMES, cfg.param_ranges)),
-             "per-axis span the samples must cover"),
-            ("Min DB size:", cfg.min_db_size,
-             "accepted-sample count required for readiness"),
-            ("Max accepted samples:", cfg.max_accepted_samples,
-             "hard cap on retained samples; blank = unbounded"),
-            ("Previews for rejected:", "yes" if cfg.save_previews_for_rejected else "no",
-             "also save previews of rejected frames"),
-        ]
-        row = 1
-        for label, value, hint in rows:
-            _value_row(row, label, value, hint)
-            row += 1
-
-        _separator(row)
-        row += 1
-        _section(row, "Calibration target")
-        row += 1
-        for value, text in (
-            (PATTERN_LED_GRID, "UV LED grid"),
-            (PATTERN_CHESSBOARD, "Printed checkerboard (inner corners = LED grid points)"),
-        ):
-            ttk.Radiobutton(
-                body, text=text, value=value, variable=self.pattern,
-                command=self._on_pattern_changed,
-            ).grid(row=row, column=0, columnspan=3, sticky="w")
-            row += 1
-        ttk.Label(
-            body,
-            text="switching drops the samples captured for the other target",
-            font=self.theme.font(8), foreground=self.theme.muted,
-        ).grid(row=row, column=0, columnspan=3, sticky="w")
-        row += 1
-
-        _separator(row)
-        row += 1
-        _section(row, "Solve")
-        row += 1
-        ttk.Checkbutton(
-            body, text="Show diagnostics plots after calibration",
-            variable=self.show_plots,
-        ).grid(row=row, column=0, columnspan=3, sticky="w")
-        row += 1
-
-        _separator(row)
-        row += 1
-        _section(row, "Incoming frames")
-        row += 1
-        ttk.Checkbutton(
-            body,
-            text="Mirror incoming frames (flip left-right)",
-            variable=self.mirror,
-            command=self._on_mirror_toggled,
-        ).grid(row=row, column=0, columnspan=3, sticky="w")
-        row += 1
-        ttk.Label(
-            body,
-            text=(
-                "for cameras whose driver delivers a mirrored image; the "
-                "preview, the detection and the saved model all use the "
-                "mirrored view"
-            ),
-            font=self.theme.font(8), foreground=self.theme.muted, wraplength=360,
-        ).grid(row=row, column=0, columnspan=3, sticky="w")
-        row += 1
-
-        ttk.Button(body, text="Close", command=dialog.destroy).grid(
-            row=row, column=0, columnspan=3, sticky="e", pady=(12, 0)
-        )
-
-        dialog.grab_set()
-        dialog.wait_window()
 
     # ------------------------------------------------------------------
     # Mirroring the incoming frames
@@ -807,7 +579,7 @@ class LiveCalibrationApp:
             line = f"{reason}: dropped {n_discarded} sample(s)"
             if detail:
                 line = f"{line} {detail}"
-            self._append_log(line)
+            self._log("event", line)
         self._update_progress_panel()
 
     def _discard_samples_for_orientation_change(self, mirrored: bool) -> None:
@@ -832,7 +604,7 @@ class LiveCalibrationApp:
         self._forward_view_cache = None
         self._forward_view_model_id = None
         self._forward_view_key = None
-        self.save_button.configure(state="disabled")
+        self._set_result_buttons(False)
         self.forward_view_var.set(False)
         self._sync_forward_view_controls()
 
@@ -843,24 +615,44 @@ class LiveCalibrationApp:
         # for a repaint explicitly.
         self.bottom_status.configure(text=text)
 
-    def _append_log(self, line):
-        self.log_box.configure(state="normal")
-        self.log_box.insert("end", line + "\n")
-        n_lines = int(self.log_box.index("end-1c").split(".")[0])
+    def _log_result(self, result) -> None:
+        """One readable sample-log line for a processed frame."""
+        if result.accepted:
+            self._log("accepted", f"Sample {result.sample_number} added")
+        elif result.similar_to is not None:
+            self._log("rejected", "Too similar to an earlier sample")
+        elif result.detected:
+            self._log("event", "Sample limit reached; frame not kept")
+        elif "skipped" in result.reason:
+            self._log("event", result.reason)
+        else:
+            self._log("missed", "No grid detected")
+
+    def _log(self, kind: str, text: str) -> None:
+        """
+        Append a timestamped, colour-coded line to the sample log.
+
+        A live stream produces a "no grid" or "too similar" result for most
+        frames, so a repeat of the newest line updates its count and time in
+        place instead of adding a line per frame.
+        """
+        box = self.log_box
+        box.configure(state="normal")
+        last = self._last_log
+        if last is not None and last[:2] == (kind, text) and kind in _COLLAPSING_LOG_KINDS:
+            count = last[2] + 1
+            box.delete("end-2l linestart", "end-1c")
+        else:
+            count = 1
+        self._last_log = (kind, text, count)
+
+        box.insert("end", datetime.now().strftime("%H:%M:%S  "), "time")
+        box.insert("end", text + (f"  (x{count})" if count > 1 else "") + "\n", kind)
+        n_lines = int(box.index("end-1c").split(".")[0])
         if n_lines > MAX_LOG_LINES:
-            self.log_box.delete("1.0", f"{n_lines - MAX_LOG_LINES + 1}.0")
-        self.log_box.see("end")
-        self.log_box.configure(state="disabled")
-
-    def _write_text(self, widget, text):
-        widget.configure(state="normal")
-        widget.delete("1.0", "end")
-        widget.insert("1.0", text)
-        widget.configure(state="disabled")
-
-    # ------------------------------------------------------------------
-    # Progress panel
-    # ------------------------------------------------------------------
+            box.delete("1.0", f"{n_lines - MAX_LOG_LINES + 1}.0")
+        box.see("end")
+        box.configure(state="disabled")
 
     def _plain_readiness(self, goodenough, progress, n, min_db_size, guide):
         """
@@ -931,9 +723,6 @@ class LiveCalibrationApp:
         # samples exist (confirmation dialog in calibrate()).
         self.calibrate_button.configure(state=("normal" if n > 0 else "disabled"))
 
-        suggestion = guide["text"] if guide is not None else "Every range is covered."
-        self._write_text(self.suggestion_box, f"• {suggestion}")
-
     def _progress_color(self, p: float) -> str:
         """Return the bar color: red -> yellow by progress, green when complete."""
         if p >= 1.0:
@@ -953,7 +742,7 @@ class LiveCalibrationApp:
         c = self.bar_canvas
         c.delete("all")
 
-        x0, x1 = 60, 280
+        x0, x1 = 60, 250
         y = 20
 
         rows = progress if progress else [(name, 0.0, 0.0, 0.0) for name in coverage.PARAM_NAMES]
@@ -983,7 +772,7 @@ class LiveCalibrationApp:
                     fill=self._progress_color(p),
                 )
             c.create_text(
-                x1 + 10, y, text=f"{100.0 * p:.0f}% covered", anchor="w",
+                x1 + 10, y, text=f"{100.0 * p:.0f}%", anchor="w",
                 font=self.theme.font(8), fill=self.theme.text,
             )
             y += 32
@@ -1293,14 +1082,14 @@ class LiveCalibrationApp:
         # Deleting invalidates any previous solve, and the cached guide is
         # keyed on len(db) -- which a delete plus an accept leaves unchanged.
         cal.calibrated = False
-        self.save_button.configure(state="disabled")
+        self._set_result_buttons(False)
         self._guide_db_len = -1
 
         self.current_sample_index = (
             min(self.current_sample_index, len(cal.db) - 1) if cal.db else 0
         )
 
-        self._append_log(f"deleted sample: {removed} ({len(cal.db)} remaining)")
+        self._log("event", f"Deleted {removed} ({len(cal.db)} samples left)")
         self._update_progress_panel()
         self._show_current_sample()
 
@@ -1341,7 +1130,7 @@ class LiveCalibrationApp:
                 cal.cal_fromcorners()
             finally:
                 self.root.configure(cursor="")
-            self.save_button.configure(state="normal")
+            self._set_result_buttons(True)
             self.forward_view_var.set(False)
             self._forward_view_cache = None
             self._forward_view_model_id = None
@@ -1351,7 +1140,7 @@ class LiveCalibrationApp:
             avg = float(np.nanmean(cal.reprojection_err))
             self._set_status(
                 f"Calibration complete: avg reprojection error {avg:.3f} px. "
-                "Use SAVE / EXPORT to write results."
+                "Use Export calibration to write the file."
             )
             messagebox.showinfo(
                 "Calibration complete",
@@ -1359,26 +1148,33 @@ class LiveCalibrationApp:
                 f"Average reprojection error: {avg:.3f} px\n"
                 f"Center: ({cal.last_ocam_model.xc:.2f}, {cal.last_ocam_model.yc:.2f})",
             )
-
-            if self.show_plots.get():
-                from ..diagnostics import plot_window, plots
-
-                Xp_abs, Yp_abs, ima_proc = cal.assemble()
-                plots.print_calib_summary(
-                    cal.last_ocam_model, cal.RRfin, ima_proc, cal.Xt, cal.Yt,
-                    Xp_abs, Yp_abs,
-                )
-                figures = plots.build_diagnostic_figures(
-                    cal.last_ocam_model, cal.RRfin, ima_proc, cal.Xt, cal.Yt,
-                    Xp_abs, Yp_abs,
-                    images=[s.image for s in cal.db],
-                    n_sq_y=cal.board.n_sq_y,
-                )
-                # Toplevel, so live capture keeps running behind the plots.
-                plot_window.show_diagnostics(figures, parent=self.root)
         except Exception as exc:
             messagebox.showerror("Calibration failed", str(exc))
             self._set_status("Calibration failed.")
+
+    def _set_result_buttons(self, calibrated: bool) -> None:
+        """Show plots and Export only make sense for a solved model."""
+        state = "normal" if calibrated else "disabled"
+        self.plots_button.configure(state=state)
+        self.export_button.configure(state=state)
+
+    def show_plots(self):
+        """Open the diagnostics window for the current calibration."""
+        cal = self.calibrator
+        if cal is None or not cal.calibrated:
+            messagebox.showinfo("Not calibrated", "Run CALIBRATE first.")
+            return
+        from ..diagnostics import plot_window, plots
+
+        Xp_abs, Yp_abs, ima_proc = cal.assemble()
+        figures = plots.build_diagnostic_figures(
+            cal.last_ocam_model, cal.RRfin, ima_proc, cal.Xt, cal.Yt,
+            Xp_abs, Yp_abs,
+            images=[s.image for s in cal.db],
+            n_sq_y=cal.board.n_sq_y,
+        )
+        # Toplevel, so live capture keeps running behind the plots.
+        plot_window.show_diagnostics(figures, parent=self.root)
 
     def _suffixed_save_filename(self, camera_id: str) -> str:
         """``calib_results_<camera_id>.txt``, or the plain default if empty."""
@@ -1387,27 +1183,27 @@ class LiveCalibrationApp:
             return "calib_results.txt"
         return f"calib_results_{camera_id}.txt"
 
-    def save_and_export(self):
+    def export_calibration(self):
         cal = self.calibrator
         if cal is None or not cal.calibrated:
             messagebox.showinfo("Not calibrated", "Run CALIBRATE first.")
             return
         path = filedialog.asksaveasfilename(
-            title="Save calibration results",
+            title="Export calibration",
             initialdir=self.output_dir.get() or ".",
             initialfile=self._default_save_filename(),
             defaultextension=".txt",
             filetypes=[("Text files", "*.txt"), ("All files", "*.*")],
         )
         if not path:
-            self._set_status("Save cancelled.")
+            self._set_status("Export cancelled.")
             return
         try:
             saved = cal.export_txt(path=path)
-            self._set_status(f"Saved calibration results to {saved}")
-            messagebox.showinfo("Saved", f"Saved:\n{saved}")
+            self._set_status(f"Exported calibration to {saved}")
+            messagebox.showinfo("Exported", f"Saved:\n{saved}")
         except Exception as exc:
-            messagebox.showerror("Save failed", str(exc))
+            messagebox.showerror("Export failed", str(exc))
 
     def _default_save_filename(self) -> str:
         # Named after the camera identifier from the driver config (set by
@@ -1426,7 +1222,6 @@ class LiveCalibrationApp:
         self.n_sq_x.set(int(board.n_sq_x))
         self.n_sq_y.set(int(board.n_sq_y))
         self.spacing_mm.set(float(board.spacing_mm))
-        self._update_board_button()
 
     def _on_board_fields_committed(self, _event=None):
         """
@@ -1464,7 +1259,6 @@ class LiveCalibrationApp:
 
         old = cal.board
         if board == old:
-            self._update_board_button()
             return "break"
 
         if (board.n_sq_x, board.n_sq_y) != (old.n_sq_x, old.n_sq_y):
@@ -1490,7 +1284,6 @@ class LiveCalibrationApp:
                 f"LED grid spacing set to {board.spacing_mm:g} mm; samples "
                 "kept -- press CALIBRATE to re-solve."
             )
-        self._update_board_button()
         return "break"
 
     def _build_source_controls(self, parent):
@@ -1621,7 +1414,7 @@ class LiveCalibrationApp:
             got_result = True
             self._latest_corners = result.corners
             if result.accepted:
-                self._latest_outcome = f"ACCEPTED as sample {len(self.calibrator.db)}"
+                self._latest_outcome = f"ACCEPTED as sample {result.sample_number}"
                 # Keep browsing anchored to the newest accepted sample.
                 self.current_sample_index = len(self.calibrator.db) - 1
             elif result.detected:
@@ -1630,7 +1423,7 @@ class LiveCalibrationApp:
             else:
                 self._latest_outcome = "no markers detected"
                 self.n_failed += 1
-            self._append_log(result.reason)
+            self._log_result(result)
 
         if got_result:
             self._update_progress_panel()
@@ -1688,7 +1481,6 @@ def launch_live_gui(
     initial_topic: str = "image",
     camera_id: str = "",
     output_dir: str = ".",
-    dev_mode: bool = False,
     mirror: bool = False,
     set_mirror_fn=None,
 ) -> None:
@@ -1705,7 +1497,6 @@ def launch_live_gui(
         initial_topic=initial_topic,
         camera_id=camera_id,
         output_dir=output_dir,
-        dev_mode=dev_mode,
         mirror=mirror,
         set_mirror_fn=set_mirror_fn,
     )
